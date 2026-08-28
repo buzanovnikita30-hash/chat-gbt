@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Package, CheckCircle, MessageCircle, Plus, ArrowRight } from "lucide-react";
 import { OrderStatusTracker } from "@/components/ui/OrderStatusTracker";
 import { ClientLoyaltyBlock } from "@/components/ui/ClientLoyaltyBlock";
+import { productLabel } from "@/lib/chatgpt-data";
 import type { OrderStatus } from "@/types/database";
 
 interface Order {
@@ -114,7 +115,7 @@ export function DashboardClient({
             <div key={order.id} className="space-y-2">
               <div className="flex items-center justify-between px-1">
                 <p className="text-sm font-semibold text-gray-800">
-                  {order.product === "chatgpt-plus" ? "ChatGPT Plus" : "ChatGPT Pro"} — {order.plan_id}
+                  {productLabel(order.product)} — {order.plan_id}
                 </p>
                 <Link
                   href="/support"
@@ -183,7 +184,7 @@ export function DashboardClient({
                     >
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-gray-900 truncate">
-                          {order.product === "chatgpt-plus" ? "ChatGPT Plus" : "ChatGPT Pro"}
+                          {productLabel(order.product)}
                         </p>
                         <p className="text-xs text-gray-400">
                           {order.plan_id} ·{" "}

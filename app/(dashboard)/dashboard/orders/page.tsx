@@ -1,6 +1,7 @@
 ﻿import { createClient } from "@/lib/supabase/server";
 import { OrderStatusTracker } from "@/components/ui/OrderStatusTracker";
 import { OrderReceiptCard } from "@/components/ui/OrderReceiptCard";
+import { productLabel } from "@/lib/chatgpt-data";
 import Link from "next/link";
 import type { Metadata } from "next";
 import type { OrderStatus } from "@/types/database";
@@ -73,7 +74,7 @@ export default async function OrdersPage() {
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-50">
                   <div>
                     <p className="text-sm font-bold text-gray-900">
-                      {order.product === "chatgpt-plus" ? "ChatGPT Plus" : "ChatGPT Pro"}{" "}
+                      {productLabel(order.product)}{" "}
                       <span className="text-gray-400 font-normal">· {order.plan_id}</span>
                     </p>
                     <p className="text-xs text-gray-400 mt-0.5">

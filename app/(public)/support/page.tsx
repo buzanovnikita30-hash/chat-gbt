@@ -61,7 +61,7 @@ export default function SupportPage() {
     {
       role: "assistant",
       content:
-        "Здравствуйте! Я отвечу на вопросы о ChatGPT Plus и Pro. Чем могу помочь?",
+        "Здравствуйте! Я отвечу на вопросы о ChatGPT Go, Plus и Pro. Чем могу помочь?",
       time: getTime(),
     },
   ]);

@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { PLUS_PLANS, PRO_PLANS, PRODUCTS, type ProductId } from "@/lib/chatgpt-data";
+import { CHATGPT_PLANS, PRODUCTS, type ProductId } from "@/lib/chatgpt-data";
 import { fadeUp } from "@/lib/motion-config";
+import { cn } from "@/lib/utils";
 
 export function PricingSection() {
-  const [activeProduct, setActiveProduct] = useState<ProductId>("chatgpt-plus");
+  const [activeProduct, setActiveProduct] = useState<ProductId>("chatgpt-go");
 
-  const plans = activeProduct === "chatgpt-plus" ? PLUS_PLANS : PRO_PLANS;
+  const plans = CHATGPT_PLANS[activeProduct];
   const product = PRODUCTS.find((p) => p.id === activeProduct)!;
 
   return (
@@ -37,18 +38,18 @@ export function PricingSection() {
             Выберите подписку
           </h2>
           <p className="max-w-2xl text-lg text-gray-500">
-            Plus для ежедневных задач — Pro для профессиональной работы
+            Go за 1 000 ₽ — Plus для ежедневных задач — Pro для профессиональной работы
           </p>
         </motion.div>
 
         {/* Product switcher */}
         <div className="mb-10 flex justify-center">
-          <div className="flex gap-1 rounded-2xl border border-black/[0.08] bg-white p-1.5">
+          <div className="flex flex-wrap justify-center gap-1 rounded-2xl border border-black/[0.08] bg-white p-1.5">
             {PRODUCTS.map((prod) => (
               <motion.button
                 key={prod.id}
                 onClick={() => setActiveProduct(prod.id)}
-                className="relative rounded-xl px-6 py-2.5 text-sm font-semibold transition-colors duration-200"
+                className="relative rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors duration-200 sm:px-6"
                 style={{ color: activeProduct === prod.id ? "white" : "#6b7280" }}
               >
                 {activeProduct === prod.id && (
@@ -109,7 +110,14 @@ export function PricingSection() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.35 }}
-            className="grid grid-cols-1 gap-6 md:grid-cols-3"
+            className={cn(
+              "grid grid-cols-1 gap-6",
+              plans.length === 1
+                ? "mx-auto max-w-sm"
+                : plans.length === 2
+                  ? "mx-auto max-w-3xl md:grid-cols-2"
+                  : "md:grid-cols-3"
+            )}
           >
             {plans.map((plan, index) => (
               <motion.article

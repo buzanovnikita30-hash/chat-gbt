@@ -27,6 +27,7 @@ function stepIndex(status: OrderStatus): number {
 
 // Время активации в минутах для тарифов
 const ACTIVATION_MINUTES: Record<string, number> = {
+  "go-1": 15,
   "plus-fast": 5,
   "plus-std": 15,
   "plus-new": 15,
