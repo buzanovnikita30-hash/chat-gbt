@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createCryptoPayment } from "@/lib/payments/crypto";
 import { notifyNewOrder } from "@/lib/telegram/notifications";
-import { PLUS_PLANS, PRO_PLANS } from "@/lib/chatgpt-data";
+import { getAllPlans } from "@/lib/chatgpt-data";
 import { z } from "zod";
 
 const schema = z.object({
@@ -10,7 +10,7 @@ const schema = z.object({
   accountEmail: z.string().email(),
 });
 
-const ALL_PLANS = [...PLUS_PLANS, ...PRO_PLANS];
+const ALL_PLANS = getAllPlans();
 // Курс USD/RUB для конвертации (обновлять периодически)
 const USD_RATE = Number(process.env.USD_RATE ?? "90");
 

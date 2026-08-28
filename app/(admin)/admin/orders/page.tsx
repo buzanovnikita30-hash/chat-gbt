@@ -1,4 +1,5 @@
 ﻿import { createClient } from "@/lib/supabase/server";
+import { productShortLabel } from "@/lib/chatgpt-data";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = { title: "Admin � ������" };
@@ -96,7 +97,7 @@ export default async function AdminOrdersPage({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <span className="text-xs">{order.product === "chatgpt-plus" ? "Plus" : "Pro"} / {order.plan_id}</span>
+                    <span className="text-xs">{productShortLabel(order.product)} / {order.plan_id}</span>
                   </td>
                   <td className="px-4 py-3 text-xs font-semibold">{order.price.toLocaleString("ru")} ?</td>
                   <td className="px-4 py-3">

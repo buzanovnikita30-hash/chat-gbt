@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { CheckCircle2, Calendar, Shield, RefreshCw, MessageCircle } from "lucide-react";
 import Link from "next/link";
+import { productLabel } from "@/lib/chatgpt-data";
 
 interface Props {
   product: string;
@@ -13,7 +14,7 @@ interface Props {
 }
 
 export function OrderReceiptCard({ product, planId, price, activatedAt, expiresAt }: Props) {
-  const productName = product === "chatgpt-plus" ? "ChatGPT Plus" : "ChatGPT Pro";
+  const productName = productLabel(product);
 
   const activatedDate = new Date(activatedAt).toLocaleDateString("ru", {
     day: "numeric",

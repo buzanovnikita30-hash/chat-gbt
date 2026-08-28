@@ -1,7 +1,7 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createPallyPayment } from "@/lib/payments/pally";
-import { CHATGPT_PLANS } from "@/lib/chatgpt-data";
+import { getAllPlans } from "@/lib/chatgpt-data";
 import { notifyNewOrder } from "@/lib/telegram/notifications";
 
 export async function POST(request: NextRequest) {
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const allPlans = [...(CHATGPT_PLANS?.plus ?? []), ...(CHATGPT_PLANS?.pro ?? [])];
+    const allPlans = getAllPlans();
     const plan = allPlans.find((p) => p.id === planId);
     if (!plan) {
       return NextResponse.json({ error: "Тариф не найден" }, { status: 400 });

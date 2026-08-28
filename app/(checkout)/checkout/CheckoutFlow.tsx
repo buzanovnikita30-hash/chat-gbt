@@ -6,12 +6,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Check, Loader2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { PLUS_PLANS, PRO_PLANS, type ExtendedPlan } from "@/lib/chatgpt-data";
+import { getAllPlans, productLabel, type ExtendedPlan } from "@/lib/chatgpt-data";
 import { checkoutStep2Schema, type CheckoutStep2Input } from "@/lib/validations";
 import { TokenSafetyBlock } from "@/components/ui/TokenSafetyBlock";
 import { cn } from "@/lib/utils";
 
-const ALL_PLANS = [...PLUS_PLANS, ...PRO_PLANS];
+const ALL_PLANS = getAllPlans();
 
 const STEPS = ["Выбор тарифа", "Email аккаунта", "Оплата"];
 
@@ -137,7 +137,9 @@ export function CheckoutFlow() {
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-gray-900">{plan.name}</span>
+                        <span className="text-sm font-semibold text-gray-900">
+                          {productLabel(plan.productId)} · {plan.name}
+                        </span>
                         {plan.badge && (
                           <span className="rounded-full bg-[#10a37f] px-2 py-0.5 text-[10px] font-bold text-white">
                             {plan.badge}
@@ -239,7 +241,9 @@ export function CheckoutFlow() {
             {/* Summary */}
             {selectedPlan && (
               <div className="mb-5 flex items-center justify-between rounded-xl border border-black/[0.07] bg-gray-50 px-4 py-3">
-                <span className="text-sm text-gray-600">{selectedPlan.name}</span>
+                <span className="text-sm text-gray-600">
+                  {productLabel(selectedPlan.productId)} · {selectedPlan.name}
+                </span>
                 <span className="font-semibold text-gray-900">{selectedPlan.price.toLocaleString("ru")} ₽</span>
               </div>
             )}

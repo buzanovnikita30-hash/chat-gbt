@@ -178,7 +178,7 @@ export const REVIEWS: Review[] = [
 // Устаревший экспорт — для обратной совместимости (используй PLUS_PLANS)
 export const PLANS: Plan[] = [];
 
-// ─── Актуальные тарифы — только 1 месяц, 3 варианта Plus ─────────────────────
+// ─── Актуальные тарифы Plus — только 1 месяц, 3 варианта ─────────────────────
 
 export const PLUS_PLANS_NEW: ExtendedPlan[] = [
   {
@@ -279,12 +279,22 @@ export const FAQ_ITEMS: FaqItem[] = [
   {
     question: "Чем отличаются тарифы?",
     answer:
-      "Все тарифы дают одинаковый полный доступ к ChatGPT Plus. Разница только в сроке и цене.",
+      "Go — 1 000 ₽/мес, стартовый платный тариф. Plus — GPT-4o без ограничений, три варианта цены. Разница между вариантами Plus — в типе аккаунта и скорости активации.",
   },
   {
     question: "Почему у вас дешевле, чем напрямую?",
     answer:
       "Мы используем официальный механизм активации и помогаем оплатить подписку в рублях без потери качества.",
+  },
+  {
+    question: "Сколько стоит ChatGPT Go?",
+    answer:
+      "ChatGPT Go стоит 1 000 ₽ в месяц. Это более доступный тариф: выше лимиты, чем на бесплатном плане, генерация изображений и работа с файлами. Если нужны GPT-4o без ограничений — берите Plus.",
+  },
+  {
+    question: "Чем ChatGPT Go отличается от Plus?",
+    answer:
+      "Go — стартовый платный тариф за 1 000 ₽/мес с повышенными лимитами относительно бесплатного плана. Plus даёт GPT-4o без ограничений, DALL·E 3 и больше инструментов. Pro — максимальная мощность без лимитов.",
   },
   {
     question: "Чем ChatGPT Pro отличается от Plus?",
@@ -326,7 +336,7 @@ export const GUARANTEE_POINTS = [
 
 // ─── Plus / Pro product system ───────────────────────────────────────────────
 
-export type ProductId = "chatgpt-plus" | "chatgpt-pro";
+export type ProductId = "chatgpt-go" | "chatgpt-plus" | "chatgpt-pro";
 
 export interface ExtendedPlan {
   id: string;
@@ -345,6 +355,29 @@ export interface ExtendedPlan {
 
 // PLUS_PLANS — алиас на актуальные тарифы
 export const PLUS_PLANS: ExtendedPlan[] = PLUS_PLANS_NEW;
+
+export const GO_PLANS: ExtendedPlan[] = [
+  {
+    id: "go-1",
+    productId: "chatgpt-go",
+    name: "1 месяц",
+    price: 1000,
+    currency: "₽",
+    period: "мес",
+    badge: "Выгодно",
+    description: "Доступнее Plus — выше лимиты, чем на бесплатном тарифе",
+    features: [
+      "GPT-4o с повышенными лимитами",
+      "Генерация изображений",
+      "Загрузка и анализ файлов",
+      "Память и кастомные GPT",
+      "Поддержка 24/7",
+      "Гарантия на весь срок",
+    ],
+    isPopular: true,
+    cta: "Подключить за 1 000 ₽",
+  },
+];
 
 // PRO_PLANS — один тариф на 1 месяц
 // ⚠️ PLACEHOLDER: уточнить цену у владельца перед запуском
@@ -374,10 +407,27 @@ export const PRO_PLANS: ExtendedPlan[] = [
   },
 ];
 
-export const CHATGPT_PLANS = {
-  plus: PLUS_PLANS,
-  pro: PRO_PLANS,
-} as const;
+export const CHATGPT_PLANS: Record<ProductId, ExtendedPlan[]> = {
+  "chatgpt-go": GO_PLANS,
+  "chatgpt-plus": PLUS_PLANS,
+  "chatgpt-pro": PRO_PLANS,
+};
+
+export function getAllPlans(): ExtendedPlan[] {
+  return [...GO_PLANS, ...PLUS_PLANS, ...PRO_PLANS];
+}
+
+export function productLabel(product: string): string {
+  if (product === "chatgpt-go") return "ChatGPT Go";
+  if (product === "chatgpt-pro") return "ChatGPT Pro";
+  return "ChatGPT Plus";
+}
+
+export function productShortLabel(product: string): string {
+  if (product === "chatgpt-go") return "Go";
+  if (product === "chatgpt-pro") return "Pro";
+  return "Plus";
+}
 
 export interface ProductInfo {
   id: ProductId;
@@ -391,6 +441,17 @@ export interface ProductInfo {
 }
 
 export const PRODUCTS: ProductInfo[] = [
+  {
+    id: "chatgpt-go",
+    name: "ChatGPT Go",
+    tagline: "Для старта",
+    description:
+      "Доступнее Plus: выше лимиты, чем на бесплатном тарифе, генерация изображений и файлы. Без иностранной карты.",
+    accentColor: "#10a37f",
+    glowColor: "rgba(16,163,127,0.12)",
+    badge: "1 000 ₽",
+    features: ["Выше лимиты", "Изображения", "Файлы", "Гарантия"],
+  },
   {
     id: "chatgpt-plus",
     name: "ChatGPT Plus",
