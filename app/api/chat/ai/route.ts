@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
 - ChatGPT Plus, быстрая активация — 2 490 ₽ (за 5 минут)
 
 - ChatGPT Pro 5x Популярный — 13 990 ₽
-- ChatGPT Pro 20x Максимальный — 26 990 ₽
+- ChatGPT Pro 20x Максимальный — 20 990 ₽
 
 КАК РАБОТАЕТ:
 1. Выбираешь тариф, оплачиваешь

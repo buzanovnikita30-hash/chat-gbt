@@ -299,7 +299,7 @@ export const FAQ_ITEMS: FaqItem[] = [
   {
     question: "Чем отличаются Pro 5x и Pro 20x?",
     answer:
-      "Функции одинаковые. Разница в лимитах: Pro 5x — 13 990 ₽/мес для активной работы, Pro 20x — 26 990 ₽/мес для максимальной нагрузки.",
+      "Функции одинаковые. Разница в лимитах: Pro 5x — 13 990 ₽/мес для активной работы, Pro 20x — 20 990 ₽/мес для максимальной нагрузки.",
   },
   {
     question: "Чем ChatGPT Pro отличается от Plus?",
@@ -411,7 +411,7 @@ export const PRO_PLANS: ExtendedPlan[] = [
     id: "pro-20x",
     productId: "chatgpt-pro",
     name: "Pro 20x",
-    price: 26990,
+    price: 20990,
     currency: "₽",
     period: "мес",
     badge: "Максимальный",
@@ -426,7 +426,7 @@ export const PRO_PLANS: ExtendedPlan[] = [
       "Гарантия на весь срок",
     ],
     isPopular: false,
-    cta: "Подключить за 26 990 ₽",
+    cta: "Подключить за 20 990 ₽",
   },
 ];
 
@@ -490,7 +490,7 @@ export const PRODUCTS: ProductInfo[] = [
     name: "ChatGPT Pro",
     tagline: "Для профессионалов",
     description:
-      "Pro 5x — 13 990 ₽, Pro 20x — 26 990 ₽. Одинаковые функции, разница только в лимитах.",
+      "Pro 5x — 13 990 ₽, Pro 20x — 20 990 ₽. Одинаковые функции, разница только в лимитах.",
     accentColor: "#10a37f",
     glowColor: "rgba(16,163,127,0.2)",
     features: ["Pro 5x / 20x", "Безлимит изображений", "Расширенный голос", "Максимум лимитов"],
