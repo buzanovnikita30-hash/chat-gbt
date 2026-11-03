@@ -22,7 +22,7 @@ const ROWS: CompareRow[] = [
   { feature: "Advanced Voice Mode", go: "Базовый", plus: "Базовый", pro: "Расширенный" },
   { feature: "Контекст окна", go: "32k токенов", plus: "128k токенов", pro: "200k токенов" },
   { feature: "Приоритет в очереди", go: false, plus: false, pro: true },
-  { feature: "Цена", go: "1 000 ₽/мес", plus: "от 1 490 ₽", pro: "По запросу" },
+  { feature: "Цена", go: "1 000 ₽/мес", plus: "от 1 490 ₽", pro: "от 13 990 ₽" },
 ];
 
 function Cell({ value, accentColor }: { value: CellValue; accentColor: string }) {

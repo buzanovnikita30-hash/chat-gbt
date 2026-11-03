@@ -32,6 +32,8 @@ const ACTIVATION_MINUTES: Record<string, number> = {
   "plus-std": 15,
   "plus-new": 15,
   "pro-1": 10,
+  "pro-5x": 10,
+  "pro-20x": 10,
 };
 
 interface Props {
