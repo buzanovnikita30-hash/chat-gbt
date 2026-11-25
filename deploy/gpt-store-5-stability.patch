@@ -1,0 +1,325 @@
+From a9fca99ca5c7e5fbee5ea800417417fa003fa5da Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Wed, 25 Nov 2026 16:20:13 +0000
+Subject: [PATCH] Stop nginx 502s from outbox cron and chat is_read polls
+
+Hourly outbox instead of every 2 minutes, skip unread UPDATEs on chat GET, cache the storefront without rewriting current_site, and abort slow admin fetches at 8s.
+---
+ app/(public)/page.tsx                     |  1 +
+ app/api/chat/messages/route.ts            | 32 ++++++++-----
+ app/api/cron/notification-outbox/route.ts |  8 ++--
+ deploy/nginx-gptplus.conf                 | 57 +++++++++++++++++++++++
+ lib/landing/gpt-landing-reviews.ts        |  2 +-
+ lib/supabase/server.ts                    |  2 +-
+ middleware.ts                             | 19 +++++---
+ vercel.json                               | 49 ++++++++++++++++++-
+ 8 files changed, 145 insertions(+), 25 deletions(-)
+ create mode 100644 deploy/nginx-gptplus.conf
+
+diff --git a/app/(public)/page.tsx b/app/(public)/page.tsx
+index 4a1cb35..5a00800 100644
+--- a/app/(public)/page.tsx
++++ b/app/(public)/page.tsx
+@@ -16,6 +16,7 @@ import { getStaticGptLandingPayload } from "@/lib/landing/gpt-static-landing";
+ const APP_URL = getPublicSiteOrigin();
+ 
+ export const revalidate = 300;
++export const dynamic = "force-static";
+ 
+ export const metadata: Metadata = {
+   title: "ChatGPT Plus без иностранной карты",
+diff --git a/app/api/chat/messages/route.ts b/app/api/chat/messages/route.ts
+index 92edaf8..19c4965 100644
+--- a/app/api/chat/messages/route.ts
++++ b/app/api/chat/messages/route.ts
+@@ -135,27 +135,35 @@ export async function GET(req: NextRequest) {
+   });
+ 
+   if (isStaff) {
+-    await supabaseAdmin
+-      .from("chat_messages")
+-      .update({ is_read: true })
+-      .eq("session_id", sessionId)
+-      .eq("sender_type", "client")
+-      .eq("is_read", false);
++    const hasUnreadClient = list.some((m) => m.sender_type === "client" && !m.is_read);
++    if (hasUnreadClient) {
++      await supabaseAdmin
++        .from("chat_messages")
++        .update({ is_read: true })
++        .eq("session_id", sessionId)
++        .eq("sender_type", "client")
++        .eq("is_read", false);
++    }
+     const subsChat =
+       session.site_id != null ? await isChatSessionForSubsStore(session.site_id) : false;
+     const notifAdmin = subsChat ? createSubsStoreAdminClient() : createAdminClient();
+-    if (notifAdmin) {
++    if (notifAdmin && hasUnreadClient) {
+       await markStaffChatNotificationsRead(notifAdmin, {
+         entityId: sessionId,
+         userId: user.id,
+       });
+     }
+   } else {
+-    await supabaseAdmin
+-      .from("chat_messages")
+-      .update({ is_read: true })
+-      .eq("session_id", sessionId)
+-      .in("sender_type", ["operator", "admin", "auto", "ai"]);
++    const staffTypes = new Set(["operator", "admin", "auto", "ai"]);
++    const hasUnreadStaff = list.some((m) => staffTypes.has(m.sender_type) && !m.is_read);
++    if (hasUnreadStaff) {
++      await supabaseAdmin
++        .from("chat_messages")
++        .update({ is_read: true })
++        .eq("session_id", sessionId)
++        .in("sender_type", ["operator", "admin", "auto", "ai"])
++        .eq("is_read", false);
++    }
+   }
+ 
+   return NextResponse.json({ messages: withReply });
+diff --git a/app/api/cron/notification-outbox/route.ts b/app/api/cron/notification-outbox/route.ts
+index 849d75c..48cd787 100644
+--- a/app/api/cron/notification-outbox/route.ts
++++ b/app/api/cron/notification-outbox/route.ts
+@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
+ import { processNotificationOutbox } from "@/lib/notifications/outbox-worker";
+ 
+ export const dynamic = "force-dynamic";
+-export const maxDuration = 60;
++export const maxDuration = 20;
+ 
+ function isAuthorized(req: NextRequest): boolean {
+   const secret = process.env.CRON_SECRET?.trim();
+@@ -21,10 +21,10 @@ async function handle(req: NextRequest) {
+   }
+ 
+   try {
+-    // Process in waves within one invocation — backlog + slow SMTP must not stall forever.
++    // One short wave. */2 + 4×25 + 60s was saturating Nano and Vercel Hobby → nginx 502.
+     const total = { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: 0, telegramDeferred: 0 };
+-    for (let wave = 0; wave < 4; wave++) {
+-      const stats = await processNotificationOutbox(25);
++    for (let wave = 0; wave < 1; wave++) {
++      const stats = await processNotificationOutbox(10);
+       total.claimed += stats.claimed;
+       total.sent += stats.sent;
+       total.failed += stats.failed;
+diff --git a/deploy/nginx-gptplus.conf b/deploy/nginx-gptplus.conf
+new file mode 100644
+index 0000000..f51e604
+--- /dev/null
++++ b/deploy/nginx-gptplus.conf
+@@ -0,0 +1,57 @@
++# Reverse-proxy for gptplus-store.ru.
++# A dead/slow origin must serve the last cached 200 instead of a white nginx 502.
++#
++# 1. Origin is gpt-store-5.vercel.app (live gptplus-store.ru). Replace if it changes.
++# 2. sudo mkdir -p /var/cache/nginx/gptplus
++# 3. Copy to sites-available, enable, nginx -t && systemctl reload nginx
++
++proxy_cache_path /var/cache/nginx/gptplus levels=1:2 keys_zone=gptplus:20m
++                 max_size=200m inactive=24h use_temp_path=off;
++
++server {
++    listen 443 ssl http2;
++    server_name gptplus-store.ru www.gptplus-store.ru;
++
++    # ssl_certificate     /etc/letsencrypt/live/gptplus-store.ru/fullchain.pem;
++    # ssl_certificate_key /etc/letsencrypt/live/gptplus-store.ru/privkey.pem;
++
++    location /api/health {
++        proxy_pass https://gpt-store-5.vercel.app;
++        proxy_ssl_server_name on;
++        proxy_set_header Host gpt-store-5.vercel.app;
++        proxy_connect_timeout 3s;
++        proxy_read_timeout 5s;
++        add_header Cache-Control "no-store";
++    }
++
++    location / {
++        proxy_pass https://gpt-store-5.vercel.app;
++        proxy_http_version 1.1;
++        proxy_ssl_server_name on;
++        proxy_set_header Host gpt-store-5.vercel.app;
++        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++        proxy_set_header X-Forwarded-Proto $scheme;
++        proxy_set_header Connection "";
++
++        proxy_connect_timeout 3s;
++        proxy_send_timeout 8s;
++        proxy_read_timeout 8s;
++
++        proxy_next_upstream error timeout http_502 http_503 http_504;
++        proxy_next_upstream_tries 3;
++
++        proxy_cache gptplus;
++        proxy_cache_methods GET HEAD;
++        proxy_cache_key "$scheme$request_method$host$request_uri";
++        proxy_cache_valid 200 120s;
++        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
++        proxy_cache_lock on;
++        add_header X-Cache-Status $upstream_cache_status always;
++    }
++}
++
++server {
++    listen 80;
++    server_name gptplus-store.ru www.gptplus-store.ru;
++    return 301 https://$host$request_uri;
++}
+diff --git a/lib/landing/gpt-landing-reviews.ts b/lib/landing/gpt-landing-reviews.ts
+index 3a61aac..33b5c4a 100644
+--- a/lib/landing/gpt-landing-reviews.ts
++++ b/lib/landing/gpt-landing-reviews.ts
+@@ -7,7 +7,7 @@ import { loadGptTelegramCuratedReviews } from "@/lib/reviews/load-gpt-telegram-c
+ import { loadGptPublishedDbReviews } from "@/lib/reviews/load-published-db-reviews";
+ import type { PublicReview } from "@/lib/reviews/publicReviews";
+ 
+-const DB_TIMEOUT_MS = 2500;
++const DB_TIMEOUT_MS = 800;
+ const LANDING_REVIEW_POOL = 72;
+ 
+ function uniqueAuthors(items: PublicReview[]): PublicReview[] {
+diff --git a/lib/supabase/server.ts b/lib/supabase/server.ts
+index df9de58..6fdcb7a 100644
+--- a/lib/supabase/server.ts
++++ b/lib/supabase/server.ts
+@@ -90,7 +90,7 @@ export async function createClient(): Promise<SupabaseClient<Database>> {
+ }
+ 
+ /** Административный клиент (обходит RLS) — только на сервере. */
+-const ADMIN_FETCH_TIMEOUT_MS = 20_000;
++const ADMIN_FETCH_TIMEOUT_MS = 8_000;
+ 
+ function fetchWithTimeout(
+   input: RequestInfo | URL,
+diff --git a/middleware.ts b/middleware.ts
+index acae0a7..5a2f69e 100644
+--- a/middleware.ts
++++ b/middleware.ts
+@@ -143,6 +143,11 @@ const CURRENT_SITE_COOKIE = {
+   httpOnly: false,
+ };
+ 
++function setCurrentSiteCookie(response: NextResponse, request: NextRequest, site: SiteSlug): void {
++  if (request.cookies.get("current_site")?.value === site) return;
++  response.cookies.set("current_site", site, CURRENT_SITE_COOKIE);
++}
++
+ function applyCurrentSiteCookie(
+   response: NextResponse,
+   path: string,
+@@ -153,7 +158,7 @@ function applyCurrentSiteCookie(
+   devPort: string | null,
+ ): void {
+   if (isSpotifyStoreHostname(requestHost)) {
+-    response.cookies.set("current_site", "subs-store", CURRENT_SITE_COOKIE);
++    setCurrentSiteCookie(response, request, "subs-store");
+     return;
+   }
+ 
+@@ -161,17 +166,17 @@ function applyCurrentSiteCookie(
+     (path.startsWith("/dashboard") || path.startsWith("/cabinet")) &&
+     (siteQuery === "subs-store" || siteQuery === "gpt-store")
+   ) {
+-    response.cookies.set("current_site", siteQuery, CURRENT_SITE_COOKIE);
++    setCurrentSiteCookie(response, request, siteQuery);
+     return;
+   }
+ 
+   if (path === "/" || path === "/gpt" || path === "/gpt-store" || path === "/chatgpt") {
+-    response.cookies.set("current_site", "gpt-store", CURRENT_SITE_COOKIE);
++    setCurrentSiteCookie(response, request, "gpt-store");
+     return;
+   }
+ 
+   if (path.startsWith("/spotify") || path.startsWith("/checkout/spotify")) {
+-    response.cookies.set("current_site", "subs-store", CURRENT_SITE_COOKIE);
++    setCurrentSiteCookie(response, request, "subs-store");
+     return;
+   }
+ 
+@@ -185,7 +190,7 @@ function applyCurrentSiteCookie(
+   });
+ 
+   if (inferredSite) {
+-    response.cookies.set("current_site", inferredSite, CURRENT_SITE_COOKIE);
++    setCurrentSiteCookie(response, request, inferredSite);
+   }
+ }
+ 
+@@ -461,5 +466,7 @@ export async function middleware(request: NextRequest) {
+ }
+ 
+ export const config = {
+-  matcher: ["/((?!_next|api/|__sb-auth).*)"],
++  matcher: [
++    "/((?!_next/static|_next/image|favicon.ico|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|woff2)|api/|__sb-auth).*)",
++  ],
+ };
+diff --git a/vercel.json b/vercel.json
+index e5ef7c8..26045e0 100644
+--- a/vercel.json
++++ b/vercel.json
+@@ -13,7 +13,54 @@
+   "crons": [
+     {
+       "path": "/api/cron/notification-outbox",
+-      "schedule": "*/2 * * * *"
++      "schedule": "0 * * * *"
++    }
++  ],
++  "headers": [
++    {
++      "source": "/",
++      "headers": [
++        {
++          "key": "Cache-Control",
++          "value": "public, s-maxage=120, stale-while-revalidate=86400"
++        }
++      ]
++    },
++    {
++      "source": "/spotify",
++      "headers": [
++        {
++          "key": "Cache-Control",
++          "value": "public, s-maxage=120, stale-while-revalidate=86400"
++        }
++      ]
++    },
++    {
++      "source": "/faq",
++      "headers": [
++        {
++          "key": "Cache-Control",
++          "value": "public, s-maxage=120, stale-while-revalidate=86400"
++        }
++      ]
++    },
++    {
++      "source": "/privacy",
++      "headers": [
++        {
++          "key": "Cache-Control",
++          "value": "public, s-maxage=120, stale-while-revalidate=86400"
++        }
++      ]
++    },
++    {
++      "source": "/terms",
++      "headers": [
++        {
++          "key": "Cache-Control",
++          "value": "public, s-maxage=120, stale-while-revalidate=86400"
++        }
++      ]
+     }
+   ]
+ }
+-- 
+2.43.0
+
