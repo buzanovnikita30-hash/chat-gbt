@@ -1,10 +1,11 @@
 ﻿import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { withTimeout } from "@/lib/auth/withTimeout";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 
 const PROTECTED_PREFIXES = ["/dashboard", "/admin", "/checkout"];
 const AUTH_PREFIXES = ["/login", "/register"];
-const AUTH_TIMEOUT_MS = 2500;
+const AUTH_TIMEOUT_MS = 1500;
 
 function isProtected(path: string) {
   return PROTECTED_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -41,6 +42,7 @@ export async function middleware(request: NextRequest) {
 
   try {
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      global: { fetch: fetchWithTimeout(AUTH_TIMEOUT_MS) },
       cookies: {
         getAll() {
           return request.cookies.getAll();

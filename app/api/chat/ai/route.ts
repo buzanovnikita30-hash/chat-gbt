@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
         max_tokens: 1024,
         stream: false,
       }),
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!deepseekRes.ok) {

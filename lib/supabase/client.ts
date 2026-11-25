@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 
 export function createClient() {
   return createBrowserClient(
@@ -10,6 +11,7 @@ export function createClient() {
         autoRefreshToken: true,
         detectSessionInUrl: true,
       },
+      global: { fetch: fetchWithTimeout(8000) },
     }
   );
 }
