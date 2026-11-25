@@ -1,0 +1,137 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import { User } from "lucide-react";
+
+import type { SiteSlug } from "@/lib/auth/siteUiSession";
+
+type LandingAuthNavLinkProps = {
+  siteSlug: SiteSlug;
+  /** SSR: сессия с сервера (httpOnly cookies), без мигания «Войти». */
+  initialLoggedIn?: boolean;
+  className?: string;
+  icon?: LucideIcon;
+  style?: React.CSSProperties;
+  onMouseEnter?: React.MouseEventHandler<HTMLAnchorElement>;
+  onMouseLeave?: React.MouseEventHandler<HTMLAnchorElement>;
+};
+
+export function cabinetHrefFor(siteSlug: SiteSlug): string {
+  return siteSlug === "subs-store"
+    ? "/dashboard?site=subs-store"
+    : "/dashboard?site=gpt-store";
+}
+
+/** Логин с returnUrl в кабинет — middleware сам редиректит уже залогиненных. */
+export function buildLandingAuthLoginHref(siteSlug: SiteSlug): string {
+  const cabinet = cabinetHrefFor(siteSlug);
+  const params = new URLSearchParams({
+    site: siteSlug,
+    returnUrl: cabinet,
+  });
+  return `/login?${params.toString()}`;
+}
+
+async function fetchLandingSession(siteSlug: SiteSlug): Promise<{
+  loggedIn: boolean;
+  emailConfirmed: boolean;
+}> {
+  try {
+    const res = await fetch(`/api/auth/landing-session?site=${encodeURIComponent(siteSlug)}`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      loggedIn?: boolean;
+      emailConfirmed?: boolean;
+    };
+    if (!res.ok) return { loggedIn: false, emailConfirmed: false };
+    return {
+      loggedIn: Boolean(body.loggedIn),
+      emailConfirmed: Boolean(body.emailConfirmed),
+    };
+  } catch {
+    return { loggedIn: false, emailConfirmed: false };
+  }
+}
+
+export function LandingAuthNavLink({
+  siteSlug,
+  initialLoggedIn = false,
+  className,
+  icon: Icon = User,
+  style,
+  onMouseEnter,
+  onMouseLeave,
+}: LandingAuthNavLinkProps) {
+  const [loggedIn, setLoggedIn] = useState(initialLoggedIn);
+  const [sessionChecked, setSessionChecked] = useState(initialLoggedIn);
+
+  const loginHref = buildLandingAuthLoginHref(siteSlug);
+
+  const refreshSession = useCallback(async () => {
+    const session = await fetchLandingSession(siteSlug);
+    setLoggedIn(session.loggedIn);
+    setSessionChecked(true);
+    return session;
+  }, [siteSlug]);
+
+  useEffect(() => {
+    const deferTimer = window.setTimeout(() => {
+      void refreshSession();
+    }, 1500);
+    return () => window.clearTimeout(deferTimer);
+  }, [refreshSession]);
+
+  const showCabinet = loggedIn && sessionChecked;
+  const label = showCabinet ? "Кабинет" : "Войти";
+  /** Always /login + returnUrl. Next Link→/dashboard hangs on RSC; full load lets middleware send staff to /admin|/operator. */
+  const href = loginHref;
+
+  return (
+    <a
+      href={href}
+      className={className}
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.location.assign(href);
+      }}
+    >
+      <Icon size={14} />
+      {label}
+    </a>
+  );
+}
+
+/** Fallback без Suspense: href на login→middleware уводит в кабинет если сессия есть. */
+export function LandingAuthNavLinkFallback({
+  siteSlug,
+  className,
+  style,
+  onMouseEnter,
+  onMouseLeave,
+}: LandingAuthNavLinkProps) {
+  const loginHref = buildLandingAuthLoginHref(siteSlug);
+  return (
+    <a
+      href={loginHref}
+      className={className}
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.location.assign(loginHref);
+      }}
+    >
+      <User size={14} />
+      Войти
+    </a>
+  );
+}

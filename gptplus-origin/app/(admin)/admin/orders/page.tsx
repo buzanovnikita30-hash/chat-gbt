@@ -1,0 +1,493 @@
+﻿import { createAdminClient } from "@/lib/supabase/server";
+import { createSubsStoreAdminClient } from "@/lib/supabase/subs-store-admin";
+import type { Metadata } from "next";
+import { unstable_noStore as noStore } from "next/cache";
+import { OrderStatusSelect } from "@/components/admin/OrderStatusSelect";
+import { SubsOrderStatusSelect } from "@/components/admin/SubsOrderStatusSelect";
+import type { OrderStatus } from "@/types/database";
+import { resolveAdminSiteSlug } from "@/lib/admin/siteFilter";
+import {
+  staffOrdersClearClientHref,
+  staffOrdersStatusHref,
+} from "@/lib/admin/staffNavHref";
+import { parseOrdersClientParam } from "@/lib/admin/orders-client-filter";
+import { resolveDashboardPeriod } from "@/lib/admin/dashboard-period";
+import { fetchGptOrdersForAdmin } from "@/lib/admin/gpt-orders-fetch";
+import { resolveGptOrderPlanLabel } from "@/lib/admin/gpt-order-plan-label";
+import { fetchSubsOrdersForAdmin } from "@/lib/admin/subs-orders-fetch";
+import { subsOrderStatusLabelRu } from "@/lib/admin/subs-order-status-labels";
+import { gptOrderStatusLabelRu } from "@/lib/admin/gpt-order-status-labels";
+import { getSiteBySlug } from "@/lib/sites";
+import { HighlightScroll } from "@/components/ui/HighlightScroll";
+import { UnpaidOrdersEmailCampaign } from "@/components/admin/UnpaidOrdersEmailCampaign";
+import { MarkOrdersSeenOnVisit } from "@/components/admin/MarkOrdersSeenOnVisit";
+import { AdminOrdersLiveRefresh } from "@/components/admin/AdminOrdersLiveRefresh";
+import { StaffOrderChatLink } from "@/components/admin/StaffOrderChatLink";
+import { OrderIdCell } from "@/components/admin/OrderIdCell";
+
+export const metadata: Metadata = { title: "Admin · Заказы" };
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const GPT_STATUS_CLASSES: Record<string, string> = {
+  pending: "bg-[#1DB954]/18 text-[#0a6b38] border-[#1DB954]/50 shadow-sm",
+  paid: "bg-emerald-50 text-emerald-800 border-emerald-300",
+  activating: "bg-sky-50 text-sky-800 border-sky-300",
+  waiting_client: "bg-amber-50 text-amber-900 border-amber-300",
+  active: "bg-[#1DB954]/25 text-[#0a6b38] border-[#1DB954]/55 font-bold",
+  failed: "bg-red-50 text-red-800 border-red-300",
+  expired: "bg-gray-100 text-gray-600 border-gray-300",
+  refunded: "bg-gray-100 text-gray-600 border-gray-300",
+};
+
+const SUBS_STATUS_CLASSES: Record<string, string> = {
+  new: "bg-[#1DB954]/18 text-[#0a6b38] border-[#1DB954]/50 shadow-sm",
+  awaiting_payment: "bg-[#1DB954]/18 text-[#0a6b38] border-[#1DB954]/50 shadow-sm",
+  pending_payment_setup: "bg-[#1DB954]/12 text-[#0d8f4a] border-[#1DB954]/40",
+  paid: "bg-emerald-50 text-emerald-800 border-emerald-300",
+  processing: "bg-sky-50 text-sky-800 border-sky-300",
+  activated: "bg-[#1DB954]/25 text-[#0a6b38] border-[#1DB954]/55 font-bold",
+  problem: "bg-red-50 text-red-800 border-red-300",
+};
+
+const GPT_STATUS_LABELS: Record<string, string> = {
+  pending: gptOrderStatusLabelRu("pending"),
+  paid: gptOrderStatusLabelRu("paid"),
+  activating: gptOrderStatusLabelRu("activating"),
+  waiting_client: gptOrderStatusLabelRu("waiting_client"),
+  active: gptOrderStatusLabelRu("active"),
+  failed: gptOrderStatusLabelRu("failed"),
+  expired: gptOrderStatusLabelRu("expired"),
+  refunded: gptOrderStatusLabelRu("refunded"),
+};
+
+const SUBS_PAY_LABELS: Record<string, string> = {
+  pending: "Ожидает оплаты",
+  paid: "Оплачено",
+  failed: "Ошибка",
+  refunded: "Возврат",
+  manual_review: "Проверка",
+};
+
+export default async function AdminOrdersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    status?: string;
+    page?: string;
+    site?: string;
+    highlight?: string;
+    client?: string;
+    from?: string;
+    to?: string;
+    paid?: string;
+    plan?: string;
+    period?: string;
+  }>;
+}) {
+  noStore();
+  const {
+    status: filterStatus,
+    page: pageParam,
+    site: siteParam,
+    client: clientParam,
+    from: fromParam,
+    to: toParam,
+    paid: paidParam,
+    plan: planParam,
+    period: periodParam,
+  } = await searchParams;
+  const siteSlug = resolveAdminSiteSlug({ site: siteParam });
+  const site = getSiteBySlug(siteSlug);
+  const page = Number(pageParam ?? 1);
+  const limit = 100;
+  const offset = (page - 1) * limit;
+  const clientFilter = parseOrdersClientParam(clientParam);
+  const clientQueryValue = clientFilter
+    ? clientParam!.trim()
+    : null;
+  const hasDateFilter = Boolean(fromParam || toParam || periodParam);
+  const period = hasDateFilter
+    ? resolveDashboardPeriod({
+        period: fromParam && toParam ? "custom" : periodParam || "month",
+        from: fromParam ?? toParam,
+        to: toParam ?? fromParam,
+      })
+    : null;
+  const paidOnly = paidParam === "1" || paidParam === "true";
+  const paymentStatus =
+    paidParam === "refunded" ? "refunded" : paidParam === "paid" ? "paid" : null;
+  const planId = planParam?.trim() || null;
+
+  if (siteSlug === "subs-store") {
+    const subs = createSubsStoreAdminClient();
+    if (!subs) {
+      return (
+        <div className="p-6">
+          <h1 className="font-heading text-2xl font-bold text-gray-900">Заказы · {site.brandName}</h1>
+          <p className="mt-2 max-w-xl text-sm text-gray-600">
+            Подключите <code className="rounded bg-gray-100 px-1">SUBS_SUPABASE_URL</code> и{" "}
+            <code className="rounded bg-gray-100 px-1">SUBS_SUPABASE_SERVICE_ROLE_KEY</code> в проекте GPT STORE.
+          </p>
+        </div>
+      );
+    }
+
+    const { orders, error: ordersError, clientMeta } = await fetchSubsOrdersForAdmin(subs, {
+      filterStatus,
+      offset,
+      limit,
+      clientFilter,
+      fromIso: period?.fromIso ?? null,
+      toIso: period?.toIso ?? null,
+      paidOnly: paidOnly && !paymentStatus,
+      paymentStatus,
+      planId,
+    });
+
+    return (
+      <div className="p-6">
+        <AdminOrdersLiveRefresh siteSlug="subs-store" />
+        <MarkOrdersSeenOnVisit site="subs-store" />
+        <HighlightScroll accent="subs" />
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="font-heading text-2xl font-bold text-gray-900">
+            Заказы
+            <span className="ml-3 text-base font-normal" style={{ color: site.primaryColor }}>
+              {site.brandName}
+            </span>
+          </h1>
+          <div className="flex flex-wrap gap-2">
+            {["", "new", "awaiting_payment", "paid", "processing", "activated", "problem"].map((s) => (
+              <a
+                key={s || "all"}
+                href={staffOrdersStatusHref(siteSlug, s || undefined, {
+                  client: clientQueryValue,
+                })}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  filterStatus === s || (!filterStatus && !s)
+                    ? "bg-[#1DB954]/15 text-[#0d8f4a]"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {s ? subsOrderStatusLabelRu(s) : "Все"}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {(clientFilter || period || paidOnly || paymentStatus || planId) && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-[#1DB954]/30 bg-[#1DB954]/08 px-4 py-2.5 text-sm text-gray-800">
+            {clientFilter ? (
+              <span>
+                Заказы клиента:{" "}
+                <span className="font-medium">{clientMeta?.label ?? clientQueryValue}</span>
+              </span>
+            ) : null}
+            {period ? (
+              <span className="text-xs text-gray-600">Период: {period.label}</span>
+            ) : null}
+            {paidOnly || paymentStatus ? (
+              <span className="text-xs text-gray-600">
+                Оплата: {paymentStatus === "refunded" ? "возврат" : "оплачено"}
+              </span>
+            ) : null}
+            {planId ? <span className="text-xs text-gray-600">Тариф: {planId}</span> : null}
+            <span className="text-xs text-gray-500">· {site.brandName}</span>
+            {clientFilter ? (
+              <a
+                href={staffOrdersClearClientHref(siteSlug, filterStatus)}
+                className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1DB954]/40"
+              >
+                Сбросить клиента
+              </a>
+            ) : null}
+            <a
+              href={staffOrdersStatusHref(siteSlug, filterStatus)}
+              className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Показать все заказы
+            </a>
+          </div>
+        )}
+
+        {filterStatus === "awaiting_payment" && (
+          <UnpaidOrdersEmailCampaign siteSlug="subs-store" />
+        )}
+
+        {ordersError && (
+          <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {ordersError}
+          </p>
+        )}
+
+        {!ordersError && orders.length === 0 && (
+          <p className="mb-4 text-sm text-gray-500">
+            {clientFilter
+              ? `У этого клиента пока нет заказов в выбранном магазине${
+                  clientMeta?.label ? ` (${clientMeta.label})` : ""
+                }.`
+              : "Заказов по выбранному фильтру нет."}
+          </p>
+        )}
+
+        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+          <table className="w-full">
+            <thead className="border-b border-gray-200 bg-gray-50">
+              <tr className="text-left text-xs font-semibold uppercase tracking-widest text-gray-500">
+                <th className="px-4 py-3">ID</th>
+                <th className="px-4 py-3">Клиент</th>
+                <th className="px-4 py-3">Email аккаунта подписки</th>
+                <th className="px-4 py-3">Тариф</th>
+                <th className="px-4 py-3">Сумма</th>
+                <th className="px-4 py-3">Статус</th>
+                <th className="px-4 py-3 min-w-[160px]">Изменить</th>
+                <th className="px-4 py-3">Чат</th>
+                <th className="px-4 py-3">Оплата</th>
+                <th className="px-4 py-3">Дата</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {orders.map((order) => {
+                const email = order.profileEmail ?? order.customer_email ?? "—";
+                const paymentLabel = SUBS_PAY_LABELS[order.payment_status] ?? "Неизвестно";
+                const tariffLabel = `${order.tariffTitle} — ${Number(order.final_price ?? 0).toLocaleString("ru")} ₽ — ${subsOrderStatusLabelRu(order.status)} — ${paymentLabel}`;
+                return (
+                  <tr
+                    key={order.id}
+                    id={`row-${order.id}`}
+                    className="scroll-mt-4 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <td className="px-4 py-3">
+                      <OrderIdCell orderId={order.id} />
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      {email}
+                      {order.profileName && (
+                        <span className="block text-gray-500">{order.profileName}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs">{order.customer_email ?? "—"}</td>
+                    <td className="px-4 py-3 text-xs">{tariffLabel}</td>
+                    <td className="px-4 py-3 text-xs font-semibold">{Number(order.final_price ?? 0).toLocaleString("ru")} ₽</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                          SUBS_STATUS_CLASSES[order.status] ??
+                          "border-gray-200 bg-gray-50 text-gray-700"
+                        }`}
+                      >
+                        {subsOrderStatusLabelRu(order.status)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <SubsOrderStatusSelect orderId={order.id} initialStatus={order.status} siteSlug="subs-store" />
+                    </td>
+                    <td className="px-4 py-3 text-xs whitespace-nowrap">
+                      <StaffOrderChatLink
+                        siteSlug="subs-store"
+                        orderId={order.id}
+                        userId={order.user_id}
+                        email={email}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600">
+                      {SUBS_PAY_LABELS[order.payment_status] ?? "Неизвестно"}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500">
+                      {new Date(order.created_at).toLocaleDateString("ru")}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  const supabase = createAdminClient();
+
+  const { orders, error: gptOrdersError, clientMeta } = await fetchGptOrdersForAdmin(supabase, {
+    filterStatus,
+    offset,
+    limit,
+    clientFilter,
+    fromIso: period?.fromIso ?? null,
+    toIso: period?.toIso ?? null,
+    paidOnly,
+    planId,
+  });
+
+  const userIds = [...new Set(orders.map((o) => o.user_id).filter((id): id is string => Boolean(id)))];
+  const profileByUserId = new Map<string, { email: string | null; telegram_username: string | null }>();
+  if (userIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, email, telegram_username")
+      .in("id", userIds);
+    for (const p of profiles ?? []) {
+      if (p.id) {
+        profileByUserId.set(p.id, {
+          email: p.email,
+          telegram_username: p.telegram_username,
+        });
+      }
+    }
+  }
+
+  return (
+    <div className="p-6">
+      <AdminOrdersLiveRefresh siteSlug="gpt-store" />
+      <MarkOrdersSeenOnVisit site="gpt-store" />
+      <HighlightScroll accent="gpt" />
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="font-heading text-2xl font-bold text-gray-900">
+          Заказы
+          <span className="ml-3 text-base font-normal" style={{ color: site.primaryColor }}>
+            {site.brandName}
+          </span>
+        </h1>
+        <div className="flex gap-2">
+          {["", "awaiting_payment", "paid", "activating", "waiting_client", "active", "failed"].map((s) => (
+            <a
+              key={s || "all"}
+              href={staffOrdersStatusHref(siteSlug, s || undefined, {
+                client: clientQueryValue,
+              })}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                filterStatus === s || (!filterStatus && !s)
+                  ? "bg-[#10a37f]/10 text-[#0f7d62]"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {s
+                ? s === "awaiting_payment"
+                  ? subsOrderStatusLabelRu("awaiting_payment")
+                  : GPT_STATUS_LABELS[s] ?? gptOrderStatusLabelRu(s)
+                : "Все"}
+            </a>
+          ))}
+        </div>
+      </div>
+
+      {(clientFilter || period || paidOnly || planId) && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-[#10a37f]/30 bg-[#10a37f]/08 px-4 py-2.5 text-sm text-gray-800">
+          {clientFilter ? (
+            <span>
+              Заказы клиента:{" "}
+              <span className="font-medium">{clientMeta?.label ?? clientQueryValue}</span>
+            </span>
+          ) : null}
+          {period ? <span className="text-xs text-gray-600">Период: {period.label}</span> : null}
+          {paidOnly ? <span className="text-xs text-gray-600">Оплата: оплачено</span> : null}
+          {planId ? <span className="text-xs text-gray-600">Тариф: {planId}</span> : null}
+          <span className="text-xs text-gray-500">· {site.brandName}</span>
+          {clientFilter ? (
+            <a
+              href={staffOrdersClearClientHref(siteSlug, filterStatus)}
+              className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10a37f]/40"
+            >
+              Сбросить клиента
+            </a>
+          ) : null}
+          <a
+            href={staffOrdersStatusHref(siteSlug, filterStatus)}
+            className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Показать все заказы
+          </a>
+        </div>
+      )}
+
+      {filterStatus === "awaiting_payment" && (
+        <UnpaidOrdersEmailCampaign siteSlug="gpt-store" />
+      )}
+
+      {gptOrdersError && (
+        <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {gptOrdersError}
+        </p>
+      )}
+
+      {!gptOrdersError && orders.length === 0 && (
+        <p className="mb-4 text-sm text-gray-500">
+          {clientFilter
+            ? `У этого клиента пока нет заказов в выбранном магазине${
+                clientMeta?.label ? ` (${clientMeta.label})` : ""
+              }.`
+            : "Заказов по выбранному фильтру нет."}
+        </p>
+      )}
+
+      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+        <table className="w-full">
+          <thead className="border-b border-gray-200 bg-gray-50">
+            <tr className="text-left text-xs font-semibold uppercase tracking-widest text-gray-500">
+              <th className="px-4 py-3">ID</th>
+              <th className="px-4 py-3">Клиент</th>
+              <th className="px-4 py-3">Email аккаунта подписки</th>
+              <th className="px-4 py-3">Тариф</th>
+              <th className="px-4 py-3">Сумма</th>
+              <th className="px-4 py-3">Статус</th>
+              <th className="px-4 py-3 min-w-[148px]">Изменить</th>
+              <th className="px-4 py-3">Дата</th>
+              <th className="px-4 py-3">Чат</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {orders.map((order) => {
+              const profile = order.user_id ? profileByUserId.get(order.user_id) : undefined;
+              const clientEmail =
+                profile?.email?.trim() ||
+                "—";
+              const accountEmail =
+                order.account_email?.trim() ||
+                "—";
+              return (
+                <tr key={order.id} id={`row-${order.id}`} className="scroll-mt-4 text-sm text-gray-700 hover:bg-gray-50">
+                  <td className="px-4 py-3">
+                    <OrderIdCell orderId={order.id} />
+                  </td>
+                  <td className="px-4 py-3 text-xs">
+                    {clientEmail}
+                    {profile?.telegram_username && (
+                      <span className="block text-gray-500">@{profile.telegram_username}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-xs">{accountEmail}</td>
+                  <td className="px-4 py-3">
+                    <span className="text-xs">{resolveGptOrderPlanLabel(order)}</span>
+                  </td>
+                  <td className="px-4 py-3 text-xs font-semibold">{order.price.toLocaleString("ru")} ₽</td>
+                    <td className="px-4 py-3">
+                    <span
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${GPT_STATUS_CLASSES[order.status] ?? GPT_STATUS_CLASSES.pending}`}
+                    >
+                      {GPT_STATUS_LABELS[order.status] ?? order.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 align-top">
+                    <OrderStatusSelect orderId={order.id} initialStatus={order.status as OrderStatus} />
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500">
+                    {new Date(order.created_at).toLocaleDateString("ru")}
+                  </td>
+                  <td className="px-4 py-3 text-xs whitespace-nowrap">
+                    <StaffOrderChatLink
+                      siteSlug="gpt-store"
+                      orderId={order.id}
+                      userId={order.user_id}
+                      email={clientEmail}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,63 @@
+"use client";
+
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
+import { ChatGptMarkIcon } from "@/components/icons/ChatGptMarkIcon";
+import { useSpotifyLanding } from "@/components/spotify/SpotifyLandingProvider";
+import { resolveCrossStoreHref } from "@/lib/store-urls";
+
+export function SpotifyGptCrossSell() {
+  const { projectsSection: s } = useSpotifyLanding();
+  if (s.showOnLanding === false || !s.ctaHref?.trim()) {
+    return null;
+  }
+
+  const href = resolveCrossStoreHref(s.ctaHref, "gpt-store");
+
+  return (
+    <section
+      id="projects"
+      className="px-4 py-12 md:px-6 md:py-16"
+      style={{ background: "#0a0a0a" }}
+    >
+      <div className="mx-auto max-w-4xl">
+        <div
+          className="flex w-full flex-col items-start justify-between gap-5 rounded-2xl p-5 text-left sm:flex-row sm:items-center sm:p-6"
+          style={{
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+      <div className="flex items-center gap-4">
+        <div
+          className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl"
+          style={{ background: "rgba(116,170,156,0.12)", border: "1px solid rgba(116,170,156,0.25)" }}
+        >
+          <ChatGptMarkIcon size={32} className="rounded-md" />
+        </div>
+        <div>
+          <p
+            className="text-xs font-semibold uppercase tracking-wide"
+            style={{ color: "rgba(255,255,255,0.4)" }}
+          >
+            {s.eyebrow ?? "Наши проекты"}
+          </p>
+          <h3 className="font-heading text-lg font-bold text-white">{s.title}</h3>
+          <p className="text-sm" style={{ color: "rgba(255,255,255,0.5)" }}>
+            {s.description}
+          </p>
+        </div>
+      </div>
+      <Link
+        href={href}
+        className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 sm:w-auto"
+        style={{ background: "#10a37f" }}
+      >
+        {s.ctaLabel}
+        <ArrowRight size={15} />
+      </Link>
+        </div>
+      </div>
+    </section>
+  );
+}

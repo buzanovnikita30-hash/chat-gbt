@@ -1,0 +1,171 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { Menu, X } from "lucide-react";
+import { SPOTIFY_ACCENT } from "@/lib/content/spotify";
+import { scrollToSpotifyPricing } from "@/lib/spotify/scroll-to-pricing";
+import { useSpotifyLanding } from "@/components/spotify/SpotifyLandingProvider";
+import { LandingOrderStatusChip } from "@/components/landing/LandingOrderStatusChip";
+import { LandingAuthNavLink } from "@/components/landing/LandingAuthNavLink";
+import { SpotifyStoreLogo } from "@/components/spotify/SpotifyStoreLogo";
+
+export function SpotifyNav({ initialLoggedIn = false }: { initialLoggedIn?: boolean }) {
+  const { nav, hero } = useSpotifyLanding();
+  const [open, setOpen] = useState(false);
+
+  const handleAnchorClick = (href: string) => {
+    setOpen(false);
+    if (href === "#pricing") {
+      scrollToSpotifyPricing();
+      return;
+    }
+    if (!href.startsWith("#")) return;
+    const el = typeof document !== "undefined" ? document.getElementById(href.slice(1)) : null;
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handlePremiumCta = () => {
+    setOpen(false);
+    scrollToSpotifyPricing();
+  };
+
+  return (
+    <header
+      className="fixed left-0 right-0 top-0 z-50 border-b transition-colors duration-150"
+      style={{
+        background: "rgba(10,10,10,0.92)",
+        backdropFilter: "blur(10px)",
+        WebkitBackdropFilter: "blur(10px)",
+        borderColor: "rgba(255,255,255,0.08)",
+      }}
+    >
+      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 md:px-6">
+        <Link
+          href="/spotify"
+          className="inline-flex shrink-0 items-center rounded-xl border px-3 py-1.5 transition-colors duration-150 hover:bg-white/[0.04] sm:px-3.5 sm:py-2"
+          style={{
+            borderColor: "rgba(29,185,84,0.28)",
+            background: "linear-gradient(180deg, rgba(18,28,20,0.95) 0%, rgba(10,14,11,0.95) 100%)",
+          }}
+          aria-label="SPOTIFY STORE"
+        >
+          <SpotifyStoreLogo height={28} compact />
+        </Link>
+
+        <nav className="hidden items-center gap-6 text-sm md:flex" style={{ color: "rgba(255,255,255,0.6)" }}>
+          {nav.links.map((link) =>
+            link.href.startsWith("#") ? (
+              <button
+                key={link.href}
+                type="button"
+                onClick={() => handleAnchorClick(link.href)}
+                className="transition-colors duration-100 hover:text-white"
+              >
+                {link.label}
+              </button>
+            ) : (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="transition-colors duration-100 hover:text-white"
+              >
+                {link.label}
+              </Link>
+            )
+          )}
+        </nav>
+
+        <div className="flex items-center gap-2">
+          <div className="hidden sm:block">
+            <LandingOrderStatusChip siteSlug="subs-store" />
+          </div>
+          <LandingAuthNavLink
+            siteSlug="subs-store"
+            initialLoggedIn={initialLoggedIn}
+            className="hidden items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors duration-100 sm:flex"
+            style={{
+              borderColor: "rgba(255,255,255,0.15)",
+              color: "rgba(255,255,255,0.7)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          />
+          <button
+            type="button"
+            onClick={handlePremiumCta}
+            className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-opacity duration-100 hover:opacity-90 sm:px-4 sm:py-2 sm:text-sm"
+            style={{ background: SPOTIFY_ACCENT, boxShadow: "0 4px 16px rgba(29,185,84,0.3)" }}
+          >
+            {hero.primaryCta}
+          </button>
+          <button
+            className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-100 md:hidden"
+            style={{ color: "rgba(255,255,255,0.7)" }}
+            onClick={() => setOpen((v) => !v)}
+            aria-label={open ? "Закрыть меню" : "Открыть меню"}
+          >
+            {open ? <X size={20} /> : <Menu size={20} />}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div
+          className="overflow-hidden border-t md:hidden"
+          style={{ borderColor: "rgba(255,255,255,0.08)", background: "#0a0a0a" }}
+        >
+          <nav className="flex flex-col gap-1 px-4 pb-4 pt-2">
+            {nav.links.map((link) =>
+              link.href.startsWith("#") ? (
+                <button
+                  key={link.href}
+                  type="button"
+                  onClick={() => handleAnchorClick(link.href)}
+                  className="rounded-lg px-3 py-2.5 text-left text-sm transition-colors duration-100"
+                  style={{ color: "rgba(255,255,255,0.6)" }}
+                >
+                  {link.label}
+                </button>
+              ) : (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg px-3 py-2.5 text-sm transition-colors duration-100"
+                  style={{ color: "rgba(255,255,255,0.6)" }}
+                >
+                  {link.label}
+                </Link>
+              )
+            )}
+            <LandingAuthNavLink
+              siteSlug="subs-store"
+              initialLoggedIn={initialLoggedIn}
+              className="mt-1 flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-center text-sm"
+              style={{
+                borderColor: "rgba(255,255,255,0.15)",
+                color: "rgba(255,255,255,0.7)",
+              }}
+            />
+            <div className="mt-1">
+              <LandingOrderStatusChip siteSlug="subs-store" />
+            </div>
+            <button
+              type="button"
+              onClick={handlePremiumCta}
+              className="mt-1 w-full rounded-lg px-3 py-2.5 text-center text-sm font-semibold text-white"
+              style={{ background: SPOTIFY_ACCENT }}
+            >
+              {hero.primaryCta}
+            </button>
+          </nav>
+        </div>
+      )}
+    </header>
+  );
+}

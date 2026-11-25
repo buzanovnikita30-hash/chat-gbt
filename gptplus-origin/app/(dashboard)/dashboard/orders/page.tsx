@@ -1,0 +1,181 @@
+import { readGptCookieUser } from "@/lib/auth/read-gpt-cookie-user";
+import { HighlightScroll } from "@/components/ui/HighlightScroll";
+import { CustomerOrdersSection } from "@/components/dashboard/CustomerOrdersSection";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { isRedirectError } from "next/dist/client/components/redirect";
+import type { Metadata } from "next";
+import { Plus } from "lucide-react";
+import { CheckoutNavButton } from "@/components/checkout/CheckoutNavButton";
+import type { AuthSiteSlug } from "@/lib/auth/detectAuthSite";
+import type { SiteSlug } from "@/lib/auth/siteUiSession";
+import { resolveCustomerSiteSlug } from "@/lib/auth/resolveCustomerSiteSlug";
+import { createSiteSessionClient } from "@/lib/supabase/site-session-server";
+import { getSiteBySlug } from "@/lib/sites";
+import { buildCustomerStatusStyles } from "@/lib/dashboard/customer-order-status-display";
+import {
+  sanitizeCustomerOrderView,
+  type CustomerOrderView,
+} from "@/lib/dashboard/customer-order-view";
+import { loadCustomerOrdersWithFocus } from "@/lib/dashboard/load-customer-orders";
+import { isSubsStoreBackendConfigured } from "@/lib/supabase/subs-store-admin";
+import { cn } from "@/lib/utils";
+import { resolvePageSearchParams } from "@/lib/next/resolve-page-search-params";
+
+export const metadata: Metadata = { title: "Мои заказы" };
+export const dynamic = "force-dynamic";
+
+export default async function OrdersPage({
+  searchParams,
+}: {
+  searchParams:
+    | Promise<{ site?: string; highlight?: string; highlightOrder?: string; order_id?: string }>
+    | { site?: string; highlight?: string; highlightOrder?: string; order_id?: string };
+}) {
+  const params = await resolvePageSearchParams(searchParams);
+  const siteSlug: SiteSlug = await resolveCustomerSiteSlug({
+    siteParam: params.site,
+    pathname: "/dashboard/orders",
+  });
+
+  const orderFocus = params.highlight ?? params.highlightOrder ?? params.order_id;
+  const site = getSiteBySlug(siteSlug);
+  const isSubs = siteSlug === "subs-store";
+  const STATUS_LABELS = buildCustomerStatusStyles(siteSlug);
+  const chatHref = `/dashboard/chat?site=${siteSlug}`;
+  const primaryColor = site.primaryColor;
+  const returnPath = `/dashboard/orders?site=${siteSlug}${orderFocus ? `&highlightOrder=${encodeURIComponent(orderFocus)}` : ""}`;
+
+  let supabase;
+  try {
+    ({ browserLike: supabase } = await createSiteSessionClient(siteSlug));
+  } catch {
+    redirect(
+      `/login?site=${siteSlug}&returnUrl=${encodeURIComponent(returnPath)}&reason=subs_env_missing`,
+    );
+  }
+
+  const { user } = await readGptCookieUser(supabase);
+  if (!user) {
+    redirect(`/login?site=${siteSlug}&returnUrl=${encodeURIComponent(returnPath)}`);
+  }
+
+  let orders: CustomerOrderView[] = [];
+  let focusedOrder: CustomerOrderView | undefined;
+  let orderFocusMissing = false;
+  let ordersLoadFailed = false;
+
+  try {
+    const loaded = await loadCustomerOrdersWithFocus({
+      siteSlug,
+      userId: user.id,
+      userEmail: user.email ?? null,
+      orderFocusId: orderFocus,
+      sessionClient: supabase,
+    });
+    orders = loaded.orders.map(sanitizeCustomerOrderView);
+    focusedOrder = loaded.focusedOrder
+      ? sanitizeCustomerOrderView(loaded.focusedOrder)
+      : undefined;
+    orderFocusMissing = loaded.orderFocusMissing;
+  } catch (err) {
+    if (isRedirectError(err)) throw err;
+    console.error("[dashboard/orders] load orders failed", err);
+    ordersLoadFailed = true;
+  }
+
+  const subsBackendMissing = isSubs && !isSubsStoreBackendConfigured();
+
+  return (
+    <div className={cn("w-full max-w-none space-y-6", isSubs && "text-gray-100")}>
+      <HighlightScroll accent={isSubs ? "subs" : "gpt"} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className={cn("font-heading text-2xl font-bold", isSubs ? "text-white" : "text-gray-900")}>
+          {isSubs ? "Spotify — История заказов" : "История заказов"}
+        </h1>
+        <CheckoutNavButton
+          siteSlug={siteSlug as AuthSiteSlug}
+          className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-md transition-opacity hover:opacity-90"
+          style={{
+            backgroundColor: primaryColor,
+            boxShadow: `0 4px 8px ${primaryColor}33`,
+          }}
+        >
+          <Plus size={15} />
+          {isSubs ? "Подключить Premium" : "Новый заказ"}
+        </CheckoutNavButton>
+      </div>
+
+      {ordersLoadFailed ? (
+        <div
+          className={cn(
+            "rounded-2xl border px-5 py-4",
+            isSubs ? "border-red-500/30 bg-red-500/10" : "border-red-200 bg-red-50",
+          )}
+        >
+          <p className={cn("text-sm font-bold", isSubs ? "text-white" : "text-gray-900")}>
+            Не удалось загрузить заказы
+          </p>
+          <p className={cn("mt-1 text-sm", isSubs ? "text-gray-400" : "text-gray-600")}>
+            Обновите страницу. Если ошибка повторяется — напишите в поддержку.
+          </p>
+          <Link
+            href={chatHref}
+            className={cn("mt-3 inline-block text-sm font-semibold underline", isSubs ? "text-[#1DB954]" : "text-[#10a37f]")}
+          >
+            Написать в поддержку
+          </Link>
+        </div>
+      ) : null}
+
+      {subsBackendMissing ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-5 py-4">
+          <p className="text-sm font-bold text-white">Заказы временно недоступны</p>
+          <p className="mt-1 text-sm text-gray-400">
+            На сервере не настроен доступ к базе Spotify STORE. Напишите в поддержку — мы откроем заказ вручную.
+          </p>
+          <Link href={chatHref} className="mt-3 inline-block text-sm font-semibold text-[#1DB954] underline">
+            Написать в поддержку
+          </Link>
+        </div>
+      ) : null}
+
+      {orderFocusMissing ? (
+        <div
+          className={cn(
+            "rounded-2xl border px-5 py-4",
+            isSubs ? "border-amber-500/30 bg-amber-500/10" : "border-amber-200 bg-amber-50",
+          )}
+        >
+          <p className={cn("text-sm font-bold", isSubs ? "text-white" : "text-gray-900")}>
+            Заказ не найден или относится к другому аккаунту
+          </p>
+          <p className={cn("mt-1 text-sm", isSubs ? "text-gray-400" : "text-gray-600")}>
+            {isSubs
+              ? "Войдите тем же email, что указывали при оформлении заказа на SPOTIFY STORE."
+              : "Войдите тем же email, что указывали при оформлении заказа на GPT STORE."}
+          </p>
+          <Link
+            href={chatHref}
+            className={cn("mt-3 inline-block text-sm font-semibold underline", isSubs ? "text-[#1DB954]" : "text-[#10a37f]")}
+          >
+            Написать в поддержку
+          </Link>
+        </div>
+      ) : null}
+
+      <CustomerOrdersSection
+        siteSlug={siteSlug}
+        orders={orders}
+        orderFocusId={orderFocus}
+        statusStyles={STATUS_LABELS}
+        primaryColor={primaryColor}
+        checkoutPath={site.checkoutPath}
+        chatHref={chatHref}
+        payEmailFallback={user.email ?? ""}
+        isSubs={isSubs}
+      />
+
+    </div>
+  );
+}

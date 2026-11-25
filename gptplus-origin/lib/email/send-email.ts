@@ -1,0 +1,262 @@
+import nodemailer from "nodemailer";
+
+import type { SiteSlug } from "@/lib/sites";
+
+import {
+  hasAnyEmailProvider,
+  hasResendConfigured,
+  hasResendFromReady,
+  hasSmtpConfigured,
+  isEmailNotificationsEnabled,
+  resolveResendFromAddress,
+} from "@/lib/email/config";
+import { resolveSmtpFromAddress } from "@/lib/email/smtp-from";
+import { isEmailRecipientSuppressed } from "@/lib/email/suppression";
+
+export type SendEmailResult = {
+  ok: boolean;
+  skipped: boolean;
+  provider: "smtp" | "resend" | "none";
+  error?: string;
+};
+
+let lastEmailError: string | null = null;
+
+export function getLastEmailError(): string | null {
+  return lastEmailError;
+}
+
+function providersToTry(): ("resend" | "smtp")[] {
+  const explicit = process.env.EMAIL_PROVIDER?.trim().toLowerCase();
+  const order: ("resend" | "smtp")[] = [];
+  const resendOk = hasResendConfigured() && hasResendFromReady();
+
+  if (explicit === "smtp") {
+    if (hasSmtpConfigured()) order.push("smtp");
+    if (resendOk) order.push("resend");
+  } else if (explicit === "resend" || explicit === "auto" || !explicit) {
+    if (resendOk) order.push("resend");
+    if (hasSmtpConfigured()) order.push("smtp");
+  }
+
+  return order;
+}
+
+function isTransientSmtpError(message: string): boolean {
+  return /(?:^|\D)(421|450|451|452)(?:\D|$)|try again|temporarily|closing connection|service not available/i.test(
+    message,
+  );
+}
+
+function isPermanentUndeliverable(message: string): boolean {
+  return /user is terminated|user not found|invalid mailbox|mailbox unavailable|account disabled|does not exist/i.test(
+    message,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendViaSmtp(
+  to: string,
+  subject: string,
+  text: string,
+  html?: string,
+  from?: string | null,
+): Promise<SendEmailResult> {
+  const host = process.env.SMTP_HOST?.trim();
+  const portRaw = process.env.SMTP_PORT?.trim() ?? "587";
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASSWORD?.trim();
+
+  if (!host) return { ok: false, skipped: false, provider: "smtp", error: "Не найден SMTP_HOST в .env.local" };
+  if (!user) return { ok: false, skipped: false, provider: "smtp", error: "Не найден SMTP_USER в .env.local" };
+  if (!pass) return { ok: false, skipped: false, provider: "smtp", error: "Не найден SMTP_PASSWORD в .env.local" };
+
+  const port = Number(portRaw);
+  if (!Number.isFinite(port)) {
+    return { ok: false, skipped: false, provider: "smtp", error: "SMTP_PORT имеет неверный формат" };
+  }
+
+  const secure = port === 465;
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+  });
+
+  const mail = {
+    from: from ?? resolveSmtpFromAddress(),
+    to,
+    subject,
+    text,
+    html: html ?? `<pre style="font-family:Arial,sans-serif;white-space:pre-wrap">${text}</pre>`,
+  };
+
+  let lastMessage = "SMTP send failed";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await transporter.sendMail(mail);
+      lastEmailError = null;
+      return { ok: true, skipped: false, provider: "smtp" };
+    } catch (err) {
+      lastMessage = err instanceof Error ? err.message : "SMTP send failed";
+      if (!isTransientSmtpError(lastMessage) || attempt === 2) break;
+      await sleep(400 * 2 ** attempt);
+    }
+  }
+
+  lastEmailError = lastMessage;
+  return { ok: false, skipped: false, provider: "smtp", error: lastMessage };
+}
+
+async function sendViaResend(
+  to: string,
+  subject: string,
+  text: string,
+  html?: string,
+  from?: string | null,
+): Promise<SendEmailResult> {
+  const resendKey = process.env.RESEND_API_KEY?.trim();
+  if (!resendKey) {
+    return { ok: false, skipped: false, provider: "resend", error: "Не найден RESEND_API_KEY в .env.local" };
+  }
+
+  const fromAddr = from ?? resolveResendFromAddress();
+  if (!fromAddr) {
+    return { ok: false, skipped: true, provider: "resend", error: "resend_from_unverified" };
+  }
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${resendKey}`,
+      },
+      body: JSON.stringify({
+        from: fromAddr,
+        to: [to],
+        subject,
+        text,
+        html: html ?? `<pre style="font-family:Arial,sans-serif;white-space:pre-wrap">${text}</pre>`,
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      lastEmailError = body.slice(0, 500);
+      return { ok: false, skipped: false, provider: "resend", error: `Resend HTTP ${res.status}: ${body.slice(0, 200)}` };
+    }
+
+    lastEmailError = null;
+    return { ok: true, skipped: false, provider: "resend" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Resend network error";
+    lastEmailError = message;
+    return { ok: false, skipped: false, provider: "resend", error: message };
+  }
+}
+
+export type SendEmailPurpose = "notification" | "auth";
+
+/** Отправка transactional email server-side. Не бросает исключения. */
+export async function sendTransactionalEmail(
+  to: string,
+  subject: string,
+  text: string,
+  html?: string,
+  options?: { siteSlug?: SiteSlug; purpose?: SendEmailPurpose },
+): Promise<SendEmailResult> {
+  const siteSlug = options?.siteSlug;
+  const purpose = options?.purpose ?? "notification";
+  const resendFrom = resolveResendFromAddress(siteSlug);
+  const smtpFrom = siteSlug ? resolveSmtpFromAddress(siteSlug) : resolveSmtpFromAddress();
+
+  if (!to?.trim()) {
+    return { ok: false, skipped: true, provider: "none", error: "Пустой получатель" };
+  }
+  // Auth emails (reset/signup) must not be blocked by notification suppression.
+  if (purpose !== "auth" && isEmailRecipientSuppressed(to)) {
+    return {
+      ok: false,
+      skipped: true,
+      provider: "none",
+      error: "recipient_suppressed",
+    };
+  }
+
+  // Auth recovery/signup still deliver when site notification emails are globally off.
+  if (purpose !== "auth" && !isEmailNotificationsEnabled()) {
+    console.warn("[Email] Пропущено: EMAIL_NOTIFICATIONS_ENABLED выключен");
+    return { ok: false, skipped: true, provider: "none", error: "EMAIL_NOTIFICATIONS_ENABLED выключен" };
+  }
+
+  const providers = providersToTry();
+  if (!providers.length || !hasAnyEmailProvider()) {
+    const msg = "Email-провайдер не настроен (SMTP или RESEND_API_KEY)";
+    console.warn(`[Email] Пропущено: ${msg}`);
+    lastEmailError = msg;
+    return { ok: false, skipped: true, provider: "none", error: msg };
+  }
+
+  const errors: string[] = [];
+  let lastResult: SendEmailResult = { ok: false, skipped: false, provider: "none" };
+
+  for (const provider of providers) {
+    const from = provider === "smtp" ? smtpFrom : resendFrom;
+    if (provider === "resend" && !from) continue;
+    const result =
+      provider === "smtp"
+        ? await sendViaSmtp(to.trim(), subject, text, html, from)
+        : await sendViaResend(to.trim(), subject, text, html, from);
+
+    if (result.ok) return result;
+
+    lastResult = result;
+    if (!result.skipped && result.error) {
+      errors.push(`${provider}: ${result.error}`);
+      console.warn(`[Email] ${provider} failed for ${to.trim()}: ${result.error}`);
+      if (isPermanentUndeliverable(result.error)) {
+        lastEmailError = result.error;
+        return { ok: false, skipped: true, provider: result.provider, error: result.error };
+      }
+    }
+  }
+
+  const combined = errors.join("; ") || lastResult.error || "send_failed";
+  lastEmailError = combined;
+  console.error("[Email] Все провайдеры не смогли отправить:", combined);
+
+  return {
+    ok: false,
+    skipped: lastResult.skipped,
+    provider: lastResult.provider,
+    error: combined,
+  };
+}
+
+export async function sendTransactionalEmailMany(
+  recipients: string[],
+  subject: string,
+  text: string,
+  html?: string,
+): Promise<SendEmailResult[]> {
+  const unique = Array.from(new Set(recipients.map((x) => x.trim().toLowerCase()).filter(Boolean)));
+  if (!unique.length) {
+    console.warn("[Email] sendTransactionalEmailMany: нет получателей");
+    return [];
+  }
+  return Promise.all(unique.map((email) => sendTransactionalEmail(email, subject, text, html)));
+}
+
+/** Ошибки доставки только в лог — не слать сырой SMTP/Resend dump на почту staff. */
+export async function notifyAdminEmailFailure(context: string, detail: string): Promise<void> {
+  console.error(
+    "[Email] delivery failed:",
+    context,
+    detail.slice(0, 300).replace(/password|secret|key/gi, "[redacted]"),
+  );
+}

@@ -1,0 +1,48 @@
+import type { Metadata } from "next";
+import { Suspense } from "react";
+import { GptFunnelSuccessGoal } from "@/components/analytics/GptFunnelSuccessGoal";
+import { SpotifyFunnelSuccessGoal } from "@/components/analytics/SpotifyFunnelSuccessGoal";
+import { CheckoutAfterPaymentRedirect } from "@/components/checkout/CheckoutAfterPaymentRedirect";
+import { CheckoutSuccessOrderRedirect } from "@/components/checkout/CheckoutSuccessOrderRedirect";
+import { reconcileUnpaidOrderPayment } from "@/lib/payments/reconcile-unpaid-order";
+import { resolveCheckoutSuccessContext } from "@/lib/payments/resolve-success-order-id";
+
+export const metadata: Metadata = { title: "Оплата получена" };
+export const dynamic = "force-dynamic";
+
+interface Props {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+export default async function CheckoutSuccessPage({ searchParams }: Props) {
+  const params = await searchParams;
+  const { orderId, siteSlug } = await resolveCheckoutSuccessContext(params);
+
+  if (!orderId) {
+    return (
+      <>
+        <GptFunnelSuccessGoal siteSlug={siteSlug} />
+        <SpotifyFunnelSuccessGoal siteSlug={siteSlug} />
+        <Suspense
+          fallback={
+            <div className="text-center text-sm text-gray-500">Переходим в кабинет…</div>
+          }
+        >
+          <CheckoutSuccessOrderRedirect />
+        </Suspense>
+      </>
+    );
+  }
+
+  await reconcileUnpaidOrderPayment({ siteSlug, orderId }).catch(() => undefined);
+
+  return (
+      <>
+      <GptFunnelSuccessGoal siteSlug={siteSlug} orderId={orderId} />
+      <SpotifyFunnelSuccessGoal siteSlug={siteSlug} orderId={orderId} />
+      <Suspense fallback={<div className="text-center text-sm text-gray-500">Подтверждаем оплату…</div>}>
+        <CheckoutAfterPaymentRedirect orderId={orderId} siteSlug={siteSlug} />
+      </Suspense>
+    </>
+  );
+}

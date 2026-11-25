@@ -1,0 +1,57 @@
+# Статический экспорт Next.js → GitHub Pages (ветка main).
+# URL проекта: https://<user>.github.io/<repo>/
+# Если репозиторий называется <user>.github.io (сайт в корне), см. комментарий в шаге Build.
+
+name: Deploy to GitHub Pages (manual only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static site
+        env:
+          # Имя репозитория = сегмент пути на GitHub Pages (project site)
+          NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
+          # Для корневого сайта user.github.io замените на пустую строку в двух строках ниже:
+          # NEXT_PUBLIC_BASE_PATH: ""
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

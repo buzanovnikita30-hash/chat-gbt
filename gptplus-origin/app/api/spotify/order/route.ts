@@ -1,0 +1,80 @@
+import { NextResponse } from "next/server";
+
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3056";
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as {
+      planId: string;
+      planName: string;
+      price: number;
+      email: string;
+    };
+
+    const { planId, planName, price, email } = body;
+
+    if (!planId || !email) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    const { createSubsAwaitingPaymentOrder } = await import("@/lib/subs/create-subs-order");
+
+    const created = await createSubsAwaitingPaymentOrder({
+      tariffSlug: planId,
+      customerEmail: email,
+      finalPrice: price,
+      basePrice: price,
+      paymentProvider: "manual",
+    });
+
+    const orderId = created.ok ? created.orderId : undefined;
+    const adminOrdersUrl = orderId
+      ? `${APP_URL}/admin/orders?site=subs-store&status=awaiting_payment&highlight=${orderId}`
+      : `${APP_URL}/admin/orders?site=subs-store&status=awaiting_payment`;
+
+    const { resolveTelegramBotToken, resolveTelegramChatIds } = await import(
+      "@/lib/telegram/bot-config"
+    );
+    const token = resolveTelegramBotToken("subs-store");
+    const chatId = resolveTelegramChatIds("subs-store")[0];
+
+    if (token && chatId && chatId !== "0") {
+      const text =
+        `🎵 *Новый заказ Spotify Premium*\n\n` +
+        `📦 Тариф: ${planName}\n` +
+        `💰 Сумма: ${price.toLocaleString("ru")} ₽\n` +
+        `📧 Email: ${email}\n` +
+        `🆔 ID тарифа: ${planId}`;
+
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+      }).catch(() => {});
+    }
+
+    if (created.ok) {
+      // Single staff write path (Subs DB + email). Do not also call recordGptStaffEvent —
+      // that previously dual-wrote GPT+Subs and produced duplicate feed rows.
+      const { recordGptStaffEvent } = await import("@/lib/notifications/staff-events");
+      void recordGptStaffEvent({
+        type: "new_order",
+        title: "Subs Store: новый заказ Spotify",
+        message: `${planName} · ${price} ₽ · ${email}`,
+        siteSlug: "subs-store",
+        entity_type: "order",
+        entity_id: created.orderId,
+        emailSubject: "🔔 Новый заказ Spotify — Subs Store",
+        emailBody: `Новый заказ Subs Store\nТариф: ${planName}\nСумма: ${price} ₽\nEmail: ${email}\nОткрыть: ${adminOrdersUrl}`,
+      }).catch(() => undefined);
+    }
+
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, orderId: created.orderId });
+  } catch {
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}

@@ -1,0 +1,339 @@
+import { NextRequest, NextResponse } from "next/server";
+
+import { createClient as createSupabaseJsClient } from "@supabase/supabase-js";
+
+import { defaultCustomerDashboard } from "@/lib/auth/authReturnUrl";
+import { logAuthEmailAttempt } from "@/lib/auth/auth-email-log";
+import { hasSubsStoreAuthUserByEmail } from "@/lib/auth/subsMembershipByEmail";
+import { sendTransactionalEmail } from "@/lib/email/send-email";
+import { getPublicBrandName } from "@/lib/sites";
+import { buildRecoveryRedirectTo, getPublicBaseUrl } from "@/lib/site-url";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
+import {
+  getSubsPublicSupabaseAnonKey,
+  getSubsPublicSupabaseUrl,
+} from "@/lib/supabase/subs-auth-env";
+import { createSubsStoreAdminClient } from "@/lib/supabase/subs-store-admin";
+
+type ResetBody = {
+  email?: string;
+  site?: string;
+};
+
+type SendResult = {
+  ok: boolean;
+  status?: number;
+  reason?: string;
+  detail?: string;
+};
+
+function parseRateLimitSeconds(message: string): number | null {
+  const m = message.match(/after\s+(\d+)\s+seconds?/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+function humanizeAuthDeliveryError(message: string): string {
+  const lower = message.toLowerCase();
+  const sec = parseRateLimitSeconds(message);
+  if (sec != null) {
+    return `Слишком частые запросы. Повторите через ${sec} сек.`;
+  }
+  if (lower.includes("rate limit") || lower.includes("too many requests")) {
+    return "Слишком частые запросы. Подождите минуту и попробуйте снова.";
+  }
+  if (lower.includes("error sending recovery email") || lower.includes("error sending email")) {
+    return "Supabase не смог отправить письмо через SMTP. Проверьте Authentication → Emails (логин/пароль mail.ru, порт 587, пароль приложения).";
+  }
+  if (lower.includes("exceed_egress_quota") || lower.includes("service for this project is restricted")) {
+    return "Сервис восстановления пароля временно недоступен из-за лимита проекта. Обновите лимиты хостинга или отключите spend cap.";
+  }
+  return message;
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function getAppBaseUrl(request: NextRequest, siteSlug: "gpt-store" | "subs-store"): string {
+  // В dev сервер может стартовать на 3001/3002/3003...; берём фактический origin запроса.
+  if (process.env.NODE_ENV !== "production") {
+    return request.nextUrl.origin.replace(/\/$/, "");
+  }
+  return getPublicBaseUrl(siteSlug);
+}
+
+function buildResetEmailHtml(recoveryLink: string, siteSlug: string, appLoginUrl: string): string {
+  const isSubsStore = siteSlug === "subs-store";
+  const brandName = getPublicBrandName(siteSlug);
+  const accentColor = isSubsStore ? "#1DB954" : "#10a37f";
+  const bgColor = isSubsStore ? "#111111" : "#ffffff";
+  const headingColor = isSubsStore ? "#ffffff" : "#111827";
+  const textColor = isSubsStore ? "#9ca3af" : "#6b7280";
+
+  return `
+    <div style="margin:0;padding:24px;background:${isSubsStore ? "#080808" : "#f3f4f6"};font-family:Arial,sans-serif;color:${headingColor}">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;width:100%;background:${bgColor};border-radius:14px;padding:28px 24px">
+              <tr>
+                <td align="center" style="padding-bottom:10px;font-size:22px;font-weight:800;letter-spacing:.3px;color:${accentColor}">
+                  ${brandName}
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="font-size:36px;line-height:1.2;font-weight:800;color:${headingColor};padding:6px 0 16px">
+                  Сброс пароля
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="font-size:14px;line-height:1.6;color:${textColor};padding-bottom:18px">
+                  Нажмите кнопку ниже, чтобы перейти к созданию нового пароля.
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="padding:6px 0 18px">
+                  <a href="${recoveryLink}" style="display:inline-block;background:${accentColor};color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-size:14px;font-weight:700;">
+                    Создать новый пароль
+                  </a>
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="font-size:12px;line-height:1.6;color:${textColor};padding-bottom:8px">
+                  Если кнопка не работает, откройте ссылку:<br />
+                  <a href="${recoveryLink}" style="color:${accentColor};text-decoration:underline;word-break:break-all">${recoveryLink}</a>
+                </td>
+              </tr>
+              ${appLoginUrl ? `<tr>
+                <td align="center" style="font-size:12px;line-height:1.6;color:${textColor};padding-bottom:8px">
+                  Войти в кабинет: <a href="${appLoginUrl}" style="color:${accentColor};text-decoration:underline">${appLoginUrl}</a>
+                </td>
+              </tr>` : ""}
+              <tr>
+                <td align="center" style="font-size:12px;line-height:1.6;color:${textColor};padding-top:6px">
+                  Если вы не запрашивали сброс пароля — проигнорируйте это письмо.
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+}
+
+export async function POST(request: NextRequest) {
+  const isLocalRequest =
+    request.nextUrl.hostname === "localhost" || request.nextUrl.hostname === "127.0.0.1";
+  const canReturnDebug = process.env.NODE_ENV !== "production" || isLocalRequest;
+  try {
+    // Не раскрываем наличие/отсутствие аккаунта по ответу API.
+    const genericOk = NextResponse.json({ ok: true, message: "Письмо отправлено" });
+
+    const body = (await request.json().catch(() => ({}))) as ResetBody;
+    const email = normalizeEmail(body.email ?? "");
+    if (!email || !isValidEmail(email)) {
+      return genericOk;
+    }
+
+    const siteSlug = body.site === "subs-store" ? "subs-store" : "gpt-store";
+    const isSubsStore = siteSlug === "subs-store";
+    if (isSubsStore) {
+      if (!createSubsStoreAdminClient() || !getSubsPublicSupabaseUrl() || !getSubsPublicSupabaseAnonKey()) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Subs Supabase не настроен: проверьте SUBS_SUPABASE_* и NEXT_PUBLIC_SUBS_SUPABASE_* в .env.local",
+          },
+          { status: 503 },
+        );
+      }
+
+      const allowed = await hasSubsStoreAuthUserByEmail(email);
+      if (!allowed) {
+        return NextResponse.json({
+          ok: true,
+          dispatched: false,
+          reason: "no_subs_membership",
+        });
+      }
+    }
+
+    const appBaseUrl = getAppBaseUrl(request, siteSlug);
+    const redirectTo = buildRecoveryRedirectTo(siteSlug, appBaseUrl);
+
+    const appLoginUrl = `${appBaseUrl}/login?site=${siteSlug}`;
+
+    const debug: Record<string, unknown> = { redirectTo, siteSlug };
+
+    const admin = isSubsStore ? createSubsStoreAdminClient()! : createAdminClient();
+
+    async function buildRecoveryLinkFromAdmin(): Promise<string> {
+      const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+        type: "recovery",
+        email,
+        options: { redirectTo },
+      });
+      if (linkError) {
+        debug.generateLinkError = linkError.message;
+        return "";
+      }
+      const actionLink = linkData?.properties?.action_link ?? "";
+      const hashedToken = linkData?.properties?.hashed_token ?? "";
+      const postResetReturn = defaultCustomerDashboard(
+        siteSlug === "subs-store" ? "subs-store" : "gpt-store",
+      );
+      const callbackLink = hashedToken
+        ? `${appBaseUrl}/auth/callback?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&site=${siteSlug}&returnUrl=${encodeURIComponent(postResetReturn)}`
+        : "";
+      // action_link — официальный one-click URL Supabase (редирект на redirectTo с токенами).
+      return actionLink || callbackLink;
+    }
+
+    async function sendCustomRecoveryEmail(recoveryLink: string): Promise<SendResult> {
+      const subject = `Сброс пароля ${getPublicBrandName(siteSlug)}`;
+      const html = buildResetEmailHtml(recoveryLink, siteSlug, appLoginUrl);
+      const text = `Сброс пароля. Откройте ссылку: ${recoveryLink}`;
+
+      const result = await sendTransactionalEmail(email, subject, text, html, {
+        siteSlug,
+        purpose: "auth",
+      });
+
+      if (result.ok) {
+        return { ok: true, status: 200, reason: result.provider };
+      }
+      return {
+        ok: false,
+        reason: result.error ?? "custom_email_failed",
+        detail: result.error,
+      };
+    }
+
+    function okRecoveryResponse(
+      channel: string,
+      recoveryLinkForEmail?: string,
+      extra?: Record<string, unknown>,
+    ) {
+      const res = NextResponse.json({
+        ok: true,
+        channel,
+        recoveryLink: canReturnDebug ? recoveryLinkForEmail : undefined,
+        ...extra,
+      });
+      res.cookies.set("auth_reset_site", siteSlug, {
+        path: "/",
+        maxAge: 60 * 60,
+        sameSite: "lax",
+        httpOnly: false,
+      });
+      return res;
+    }
+
+    async function sendViaSupabaseSmtp() {
+      return isSubsStore
+        ? createSupabaseJsClient(getSubsPublicSupabaseUrl(), getSubsPublicSupabaseAnonKey(), {
+            auth: { autoRefreshToken: false, persistSession: false },
+          }).auth.resetPasswordForEmail(email, { redirectTo })
+        : (await createClient()).auth.resetPasswordForEmail(email, { redirectTo });
+    }
+
+    // ——— Приоритет: generateLink + своё письмо (SMTP/Resend из .env) — ссылка без PKCE-ловушки ———
+    const recoveryLinkForEmail = await buildRecoveryLinkFromAdmin();
+    debug.recoveryLinkGenerated = Boolean(recoveryLinkForEmail);
+
+    if (recoveryLinkForEmail) {
+      const customSend = await sendCustomRecoveryEmail(recoveryLinkForEmail);
+      debug.customEmail = customSend;
+      if (customSend.ok) {
+        logAuthEmailAttempt({
+          event: "password_recovery",
+          email,
+          siteSlug: siteSlug === "subs-store" ? "subs-store" : "gpt-store",
+          ok: true,
+          channel: String(customSend.reason ?? "email"),
+        });
+        return okRecoveryResponse(`app_${customSend.reason ?? "email"}`, recoveryLinkForEmail);
+      }
+    } else {
+      const msg = humanizeAuthDeliveryError(String(debug.generateLinkError ?? "Не удалось создать ссылку"));
+      const retryAfter = parseRateLimitSeconds(String(debug.generateLinkError ?? ""));
+      if (!retryAfter) {
+        return NextResponse.json(
+          { ok: false, error: msg, channel: "generate_link_failed" },
+          { status: 503 },
+        );
+      }
+    }
+
+    // ——— Fallback: письмо из Supabase Dashboard SMTP (PKCE) ———
+    const { error: supabaseError } = await sendViaSupabaseSmtp();
+    debug.supabaseError = supabaseError?.message ?? null;
+
+    if (!supabaseError) {
+      logAuthEmailAttempt({
+        event: "password_recovery",
+        email,
+        siteSlug: siteSlug === "subs-store" ? "subs-store" : "gpt-store",
+        ok: true,
+        channel: "supabase",
+      });
+      return okRecoveryResponse(
+        "supabase",
+        canReturnDebug ? recoveryLinkForEmail : undefined,
+        { message: "Письмо отправлено через SMTP Supabase" },
+      );
+    }
+
+    const rateMsg = humanizeAuthDeliveryError(supabaseError.message);
+    const retryAfter = parseRateLimitSeconds(supabaseError.message);
+    const smtpIntervalHint =
+      retryAfter != null
+        ? " В Supabase → Authentication → Emails задан интервал между письмами одному пользователю (у вас ~60 сек)."
+        : "";
+
+    const debugRecoveryLink = canReturnDebug ? recoveryLinkForEmail : "";
+
+    if (debugRecoveryLink && canReturnDebug) {
+      return NextResponse.json({
+        ok: true,
+        channel: "rate_limited_with_link",
+        recoveryLink: debugRecoveryLink,
+        warning: rateMsg + smtpIntervalHint,
+        retryAfter: retryAfter ?? undefined,
+      });
+    }
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: rateMsg + smtpIntervalHint,
+        retryAfter: retryAfter ?? undefined,
+        channel: "supabase_rate_limited",
+        recoveryLink: debugRecoveryLink || undefined,
+      },
+      { status: 429 },
+    );
+  } catch (error) {
+    console.error("[reset-password] unexpected error", error);
+    // Никогда не показываем внутреннюю ошибку пользователю в этом флоу.
+    if (canReturnDebug) {
+      return NextResponse.json({
+        ok: true,
+        channel: "none",
+        debug: {
+          unexpectedError:
+            error instanceof Error ? error.message : "unknown_error",
+        },
+      });
+    }
+    return NextResponse.json({ ok: true, message: "Письмо отправлено" });
+  }
+}
+

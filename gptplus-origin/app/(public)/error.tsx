@@ -1,0 +1,40 @@
+"use client";
+
+import { useEffect } from "react";
+
+import { hardReloadCurrentPage, reloadOnceForStaleChunk } from "@/lib/chunk-error-reload";
+
+export default function PublicError({
+  error,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  useEffect(() => {
+    console.error("[gpt-landing]", error);
+    reloadOnceForStaleChunk(error);
+  }, [error]);
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-transparent px-4 text-center">
+      <p className="font-heading mb-2 text-xl font-bold text-gray-900">Не удалось загрузить страницу</p>
+      <p className="mb-6 max-w-md text-sm text-gray-500">
+        Попробуйте обновить страницу. Если ошибка повторяется — откройте главную и зайдите снова.
+      </p>
+      {process.env.NODE_ENV === "development" && error.message && (
+        <p className="mb-4 max-w-lg rounded-lg bg-red-50 px-3 py-2 text-left text-xs text-red-700">
+          {error.message}
+        </p>
+      )}
+      <div className="flex flex-col items-center gap-3">
+        <button
+          type="button"
+          onClick={() => hardReloadCurrentPage()}
+          className="rounded-xl bg-[#10a37f] px-5 py-2.5 text-sm font-semibold text-white"
+        >
+          Обновить страницу
+        </button>
+      </div>
+    </div>
+  );
+}
