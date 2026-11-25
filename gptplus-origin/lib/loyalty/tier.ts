@@ -38,3 +38,10 @@ export function getBonusTier(completed: number): LoyaltyTier {
   if (completed >= 3) return { name: "Бронзовый", discount: 5, nextAt: 5 };
   return { name: "Новичок", discount: 0, nextAt: 3 };
 }
+
+/** Каждый 5-й заказ клиента (не tier): фиксированная скидка на этот заказ. */
+export const FIFTH_ORDER_DISCOUNT_PERCENT = 10;
+
+export function isFifthOrderBonus(completedOrders: number): boolean {
+  return completedOrders > 0 && (completedOrders + 1) % 5 === 0;
+}

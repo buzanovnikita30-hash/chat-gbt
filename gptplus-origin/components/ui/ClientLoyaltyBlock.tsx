@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { Award, Gift, Zap, TrendingUp } from "lucide-react";
+import { FIFTH_ORDER_DISCOUNT_PERCENT, isFifthOrderBonus } from "@/lib/loyalty/tier";
 
 interface Props {
   createdAt: string;
@@ -56,7 +57,7 @@ export function ClientLoyaltyBlock({
   const memberSince = getMemberSince(createdAt);
   const tier = getBonusTier(completedOrders);
   const nextTier = getNextTier(completedOrders);
-  const isNextOrderBonus = completedOrders > 0 && (completedOrders + 1) % 5 === 0;
+  const isNextOrderBonus = isFifthOrderBonus(completedOrders);
   const progressPct = nextTier
     ? Math.round(((completedOrders) / nextTier.total) * 100)
     : 100;
@@ -168,7 +169,7 @@ export function ClientLoyaltyBlock({
         >
           <Zap size={14} className={`shrink-0 ${isSubs ? "text-amber-400" : "text-amber-500"}`} />
           <span className={`text-xs font-semibold ${isSubs ? "text-amber-200" : "text-amber-700"}`}>
-            Следующий заказ — каждый 5-й! Скидка 50 процентов
+            Следующий заказ — каждый 5-й! Скидка {FIFTH_ORDER_DISCOUNT_PERCENT} процентов
           </span>
         </div>
       )}
