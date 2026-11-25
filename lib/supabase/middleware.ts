@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Database } from "@/types/database";
+import { withTimeout } from "@/lib/auth/withTimeout";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -26,13 +27,12 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  // Обновляем сессию — важно не удалять этот вызов
   let user = null;
   try {
-    const { data } = await supabase.auth.getUser();
+    const { data } = await withTimeout(supabase.auth.getUser(), 2500);
     user = data.user;
   } catch {
-    // Supabase недоступен (нет .env.local) — продолжаем без сессии
+    // Supabase недоступен или не отвечает — публичные страницы не должны падать
   }
 
   return { supabaseResponse, user };
