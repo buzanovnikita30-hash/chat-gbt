@@ -1,15 +1,29 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/types";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+let cached: SupabaseClient<Database> | null = null;
 
-if (!supabaseUrl || !serviceRoleKey) {
-  throw new Error("Missing Supabase admin env vars");
+export function getSupabaseAdmin(): SupabaseClient<Database> {
+  if (cached) return cached;
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Missing Supabase admin env vars");
+  }
+
+  cached = createClient<Database>(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return cached;
 }
 
-export const supabaseAdmin = createClient<Database>(supabaseUrl, serviceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
+/** @deprecated Use getSupabaseAdmin() — lazy so a missing key does not crash the whole process at import. */
+export const supabaseAdmin = new Proxy({} as SupabaseClient<Database>, {
+  get(_target, prop, receiver) {
+    const client = getSupabaseAdmin();
+    const value = Reflect.get(client, prop, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
 });
-

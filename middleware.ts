@@ -87,5 +87,16 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/|robots.txt|sitemap.xml).*)"],
+  // Только кабинет/чекаут/логин. Главная и витрина не запускают middleware —
+  // иначе холодный edge + Supabase дают nginx 502 на всём домене.
+  matcher: [
+    "/dashboard/:path*",
+    "/admin/:path*",
+    "/checkout/:path*",
+    "/login/:path*",
+    "/register/:path*",
+    "/reset-password/:path*",
+    "/callback/:path*",
+    "/verify-email/:path*",
+  ],
 };

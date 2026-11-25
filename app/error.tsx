@@ -15,12 +15,10 @@ export default function Error({
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
-      <h1 className="font-heading text-2xl font-bold text-gray-900">Не удалось загрузить страницу</h1>
+      <h1 className="font-heading text-2xl font-bold text-gray-900">Страница временно недоступна</h1>
       <p className="mt-3 max-w-md text-sm text-gray-600">
-        Попробуйте обновить. Если сообщение повторяется — остановите все окна с{" "}
-        <code className="rounded bg-gray-100 px-1">npm run dev</code>, удалите папку{" "}
-        <code className="rounded bg-gray-100 px-1">.next</code> и снова запустите{" "}
-        <code className="rounded bg-gray-100 px-1">npm run dev:clean</code>.
+        Попробуйте обновить. Если ошибка повторяется — напишите в поддержку, витрина и тарифы должны
+        открываться даже при сбое базы.
       </p>
       <button
         type="button"
